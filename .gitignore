@@ -1,0 +1,12 @@
+/.vscode/tasks.json
+/.vscode/launch.json
+.DS_Store
+/target
+/profiling
+data
+logs
+
+# Nix
+/.direnv
+/result
+/.pre-commit-config.yaml
