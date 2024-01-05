@@ -83,7 +83,7 @@ pub fn add_error(_: TokenStream, input: TokenStream) -> TokenStream {
     });
 
     let expanded = quote! {
-        #[derive(Debug, Serialize, thiserror::Error)]
+        #[derive(Debug, thiserror::Error)]
         pub enum #enum_name {
             #(#variants)*
         }
