@@ -1368,7 +1368,7 @@ impl RedisConnectionPool {
 
                                 // Extract the stream ID, assuming it's the first element in the array.
                                 if let Some(RedisValue::String(id)) = entry_array.get(0) {
-                                    field_values.push(("id".to_string(), id.to_string()));
+                                    field_values.push(("stream_id".to_string(), id.to_string()));
                                 }
 
                                 // Extract the field-value pairs, assuming they start from the second element.
