@@ -147,8 +147,8 @@ pub fn impl_getter(_: TokenStream, input: TokenStream) -> TokenStream {
         pub struct #struct_name(pub #inner_type);
 
         impl #struct_name {
-            pub fn inner(self) -> #inner_type {
-                self.0
+            pub fn inner(&self) -> #inner_type {
+                self.0.to_owned()
             }
         }
     };
