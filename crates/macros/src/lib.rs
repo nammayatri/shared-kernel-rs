@@ -8,7 +8,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, ItemEnum, ItemFn};
+use syn::{parse_macro_input, ItemEnum, ItemFn, ItemStruct};
 
 #[proc_macro_attribute]
 pub fn measure_duration(_: TokenStream, input: TokenStream) -> TokenStream {
@@ -110,4 +110,48 @@ fn convert_to_snake_case(input: String) -> String {
     }
 
     result
+}
+
+#[proc_macro_attribute]
+pub fn impl_getter(_: TokenStream, input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemStruct);
+
+    let struct_name = &input.ident;
+    let inner_type = match &input.fields {
+        syn::Fields::Named(fields) => {
+            if let Some(field) = fields.named.first() {
+                &field.ty
+            } else {
+                return syn::Error::new_spanned(&input, "Struct must have at least one field")
+                    .to_compile_error()
+                    .into();
+            }
+        }
+        syn::Fields::Unnamed(fields) => {
+            if let Some(field) = fields.unnamed.first() {
+                &field.ty
+            } else {
+                return syn::Error::new_spanned(&input, "Struct must have at least one field")
+                    .to_compile_error()
+                    .into();
+            }
+        }
+        syn::Fields::Unit => {
+            return syn::Error::new_spanned(&input, "Struct must have at least one field")
+                .to_compile_error()
+                .into();
+        }
+    };
+
+    let gen = quote! {
+        pub struct #struct_name(pub #inner_type);
+
+        impl #struct_name {
+            pub fn inner(self) -> #inner_type {
+                self.0
+            }
+        }
+    };
+
+    gen.into()
 }
