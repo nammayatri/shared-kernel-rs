@@ -1349,7 +1349,6 @@ impl RedisConnectionPool {
             )
             .await
             .map_err(|err| RedisError::XReadFailed(err.to_string()))?;
-
         let mut result = FxHashMap::default();
 
         match output {
@@ -1395,6 +1394,7 @@ impl RedisConnectionPool {
 
                 Ok(result)
             }
+            RedisValue::Null => Ok(result),
             case => Err(RedisError::XReadFailed(format!(
                 "Unexpected RedisValue encountered : {:?}",
                 case
