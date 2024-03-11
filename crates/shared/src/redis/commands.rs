@@ -1338,11 +1338,12 @@ impl RedisConnectionPool {
         &self,
         keys: Vec<String>,
         ids: Vec<String>,
+        count: Option<u64>,
     ) -> Result<FxHashMap<String, Vec<Vec<(String, String)>>>, RedisError> {
         let output: RedisValue = self
             .pool
             .xread(
-                None,
+                count,
                 None,
                 keys,
                 ids.iter().map(|id| Manual(id.into())).collect::<Vec<XID>>(),
