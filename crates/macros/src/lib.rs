@@ -17,11 +17,13 @@ pub fn measure_duration(_: TokenStream, input: TokenStream) -> TokenStream {
     let fn_name = &input_fn.sig.ident;
     let args = &input_fn.sig.inputs;
     let return_type = &input_fn.sig.output;
+    let generics = &input_fn.sig.generics;
+    let where_clause = &input_fn.sig.generics.where_clause;
     let is_async = input_fn.sig.asyncness.is_some();
 
     let expanded = if is_async {
         quote! {
-            pub async fn #fn_name(#args) #return_type {
+            pub async fn #fn_name #generics(#args) #return_type #where_clause {
                 let start_time = std::time::Instant::now();
                 let result = #function_body;
                 measure_latency_duration!(stringify!(#fn_name), start_time);
@@ -33,7 +35,7 @@ pub fn measure_duration(_: TokenStream, input: TokenStream) -> TokenStream {
         }
     } else {
         quote! {
-            pub fn #fn_name(#args) #return_type {
+            pub fn #fn_name #generics(#args) #return_type #where_clause {
                 let start_time = std::time::Instant::now();
                 let result = #function_body;
                 measure_latency_duration!(stringify!(#fn_name), start_time);
