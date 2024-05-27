@@ -8,7 +8,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, ItemEnum, ItemFn, ItemStruct};
+use syn::{parse_macro_input, Expr, ItemEnum, ItemFn, ItemStruct, Lit};
 
 #[proc_macro_attribute]
 pub fn measure_duration(_: TokenStream, input: TokenStream) -> TokenStream {
@@ -42,6 +42,47 @@ pub fn measure_duration(_: TokenStream, input: TokenStream) -> TokenStream {
                 let elapsed_time = start_time.elapsed();
                 let elapsed_ms = elapsed_time.as_secs() * 1000 + u64::from(elapsed_time.subsec_millis());
                 debug!("Function: {} | Duration (ms): {}", stringify!(#fn_name), elapsed_ms);
+                result
+            }
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+#[proc_macro]
+pub fn measure_duration_block(input: TokenStream) -> TokenStream {
+    let cloned_input = input.clone();
+    let block = parse_macro_input!(input as syn::Block);
+    let input = match parse_macro_input!(cloned_input as Expr) {
+        Expr::Lit(expr_lit) => match expr_lit.lit {
+            Lit::Str(lit_str) => Some(lit_str.value()),
+            _ => None,
+        },
+        _ => None,
+    };
+
+    let expanded = if let Some(name) = input {
+        quote! {
+            {
+                let start_time = std::time::Instant::now();
+                let result = { #block };
+                measure_latency_duration!(stringify!(#name), start_time);
+                let elapsed_time = start_time.elapsed();
+                let elapsed_ms = elapsed_time.as_secs() * 1000 + u64::from(elapsed_time.subsec_millis());
+                debug!("Function: {} | Duration (ms): {}", stringify!(#name), elapsed_ms);
+                result
+            }
+        }
+    } else {
+        quote! {
+            {
+                let start_time = std::time::Instant::now();
+                let result = { #block };
+                measure_latency_duration!(stringify!("unknown_block_name"), start_time);
+                let elapsed_time = start_time.elapsed();
+                let elapsed_ms = elapsed_time.as_secs() * 1000 + u64::from(elapsed_time.subsec_millis());
+                debug!("Function: {} | Duration (ms): {}", stringify!("unknown_block_name"), elapsed_ms);
                 result
             }
         }
