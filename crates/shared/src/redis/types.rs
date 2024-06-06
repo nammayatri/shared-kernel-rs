@@ -9,13 +9,16 @@
 use std::sync::{atomic, Arc};
 
 use error_stack::IntoReport;
-use fred::interfaces::ClientLike;
+use fred::{
+    interfaces::ClientLike,
+    types::{ReconnectPolicy, RedisConfig},
+};
 use serde::Deserialize;
 use tracing::error;
 
 use super::error::RedisError;
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Point {
     pub lat: f64,
     pub lon: f64,
@@ -91,28 +94,70 @@ impl RedisSettings {
 }
 
 pub struct RedisClient {
-    inner: fred::prelude::RedisClient,
+    pub client: fred::prelude::RedisClient,
 }
 
 impl std::ops::Deref for RedisClient {
     type Target = fred::prelude::RedisClient;
     fn deref(&self) -> &Self::Target {
-        &self.inner
+        &self.client
     }
 }
 
 impl RedisClient {
-    pub async fn new(
-        config: fred::types::RedisConfig,
-        reconnect_policy: fred::types::ReconnectPolicy,
-    ) -> Result<Self, RedisError> {
-        let client = fred::prelude::RedisClient::new(config, None, Some(reconnect_policy));
+    pub async fn new(conf: RedisSettings) -> Result<Self, RedisError> {
+        let (redis_config, reconnect_policy) = Self::get_config(&conf).await?;
+        let client = fred::prelude::RedisClient::new(redis_config, None, Some(reconnect_policy));
         client.connect();
         client
             .wait_for_connect()
             .await
             .map_err(|err| RedisError::RedisConnectionError(err.to_string()))?;
-        Ok(Self { inner: client })
+        Ok(Self { client })
+    }
+    async fn get_config(
+        conf: &RedisSettings,
+    ) -> Result<(RedisConfig, ReconnectPolicy), RedisError> {
+        let redis_connection_url = match conf.cluster_enabled {
+            // Fred relies on this format for specifying cluster where the host port is ignored & only query parameters are used for node addresses
+            // redis-cluster://username:password@host:port?node=bar.com:30002&node=baz.com:30003
+            true => format!(
+                "redis-cluster://{}:{}?{}",
+                conf.host,
+                conf.port,
+                conf.cluster_urls
+                    .iter()
+                    .flat_map(|url| vec!["&", url])
+                    .skip(1)
+                    .collect::<String>()
+            ),
+            false => format!(
+                "redis://{}:{}/{}", //URI Schema
+                conf.host, conf.port, conf.partition
+            ),
+        };
+        let mut config = fred::types::RedisConfig::from_url(&redis_connection_url)
+            .into_report()
+            .map_err(|err| RedisError::RedisConnectionError(err.to_string()))?;
+
+        if !conf.use_legacy_version {
+            config.version = fred::types::RespVersion::RESP3;
+        }
+        config.tracing = fred::types::TracingConfig::new(true);
+        config.blocking = fred::types::Blocking::Error;
+        let reconnect_policy = fred::types::ReconnectPolicy::new_constant(
+            conf.reconnect_max_attempts,
+            conf.reconnect_delay,
+        );
+
+        Ok((config, reconnect_policy))
+    }
+
+    pub async fn close_connection(&mut self) {
+        match self.client.quit().await {
+            Ok(_) => (),
+            Err(err) => error!("[REDIS CLIENT CLOSE CONNECTION FAILED] => {:?}", err),
+        }
     }
 }
 
@@ -144,6 +189,7 @@ impl RedisConnectionPool {
         } else {
             Ok(Self {
                 pool,
+
                 migration_pool: None,
                 join_handles,
                 is_redis_available: Arc::new(atomic::AtomicBool::new(true)),

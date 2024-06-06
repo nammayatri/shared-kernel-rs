@@ -51,6 +51,9 @@ pub enum RedisError {
     XAddFailed(String),
     XReadFailed(String),
     XDeleteFailed(String),
+    ClusterNodesError(String),
+    ClusterKeySlotError(String),
+    ClusterShardsToNodeError(String),
 }
 
 impl RedisError {
@@ -90,6 +93,7 @@ impl RedisError {
             RedisError::ZCardFailed(err) => format!("Redis Error : {err}"),
             RedisError::GeoPosFailed(err) => format!("Redis Error : {err}"),
             RedisError::ZRangeFailed(err) => format!("Redis Error : {err}"),
+            RedisError::XReadFailed(err) => format!("Redis Error : {err}"),
             _ => "Some Error Occured".to_string(),
         }
     }
@@ -126,6 +130,9 @@ impl RedisError {
             RedisError::XAddFailed(_) => "XADD_FAILED",
             RedisError::XReadFailed(_) => "XREAD_FAILED",
             RedisError::XDeleteFailed(_) => "XDEL_FAILED",
+            RedisError::ClusterNodesError(_) => "CLUSTER_NODES_ERROR",
+            RedisError::ClusterShardsToNodeError(_) => "CLUSTER_SHARDS_TO_NODE_ERROR",
+            RedisError::ClusterKeySlotError(_) => "CLUSTER_KEY_SLOT_ERROR",
         }
         .to_string()
     }
@@ -170,6 +177,9 @@ impl ResponseError for RedisError {
             RedisError::XAddFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
             RedisError::XReadFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
             RedisError::XDeleteFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            RedisError::ClusterNodesError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            RedisError::ClusterShardsToNodeError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            RedisError::ClusterKeySlotError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }

@@ -11,7 +11,8 @@ use crate::redis::error::RedisError;
 use crate::redis::types::*;
 use fred::{
     interfaces::{
-        GeoInterface, HashesInterface, KeysInterface, SortedSetsInterface, StreamsInterface,
+        ClusterInterface, GeoInterface, HashesInterface, KeysInterface, SortedSetsInterface,
+        StreamsInterface,
     },
     prelude::ListInterface,
     types::{
@@ -1408,5 +1409,85 @@ impl RedisConnectionPool {
             .xdel(key, id)
             .await
             .map_err(|err| RedisError::XDeleteFailed(err.to_string()))
+    }
+}
+
+impl RedisClient {
+    pub async fn node_to_shard_mapping(
+        &self,
+        shards: u64,
+    ) -> Result<FxHashMap<String, Vec<u64>>, RedisError> {
+        let nodes_info: String = self
+            .client
+            .cluster_nodes()
+            .await
+            .map_err(|err| RedisError::ClusterNodesError(err.to_string()))?;
+
+        let master_nodes_info: Vec<String> = nodes_info
+            .lines()
+            .filter(|line| line.contains("master"))
+            .map(|line| line.to_string())
+            .collect();
+
+        let mut slot_to_node = FxHashMap::default();
+        for node_info in master_nodes_info {
+            if let Some((node_info, slots_info)) = node_info.split_once(" connected ") {
+                let node_parts: Vec<&str> = node_info.split_whitespace().collect();
+                let node_id = node_parts[0];
+                let node_address = node_parts[1];
+                let node_key = format!("{} {}", node_id, node_address);
+
+                for slot_range in slots_info.split_whitespace() {
+                    if slot_range.contains('-') {
+                        let slots: Vec<&str> = slot_range.split('-').collect();
+                        let start_slot: u16 = slots[0].parse().map_err(|_| {
+                            RedisError::ClusterShardsToNodeError(
+                                "Unable to parse start slot.".to_string(),
+                            )
+                        })?;
+                        let end_slot: u16 = slots[1].parse().map_err(|_| {
+                            RedisError::ClusterShardsToNodeError(
+                                "Unable to parse end slot.".to_string(),
+                            )
+                        })?;
+
+                        for slot in start_slot..=end_slot {
+                            slot_to_node.insert(slot, node_key.clone());
+                        }
+                    } else {
+                        let slot: u16 = slot_range.parse().map_err(|_| {
+                            RedisError::ClusterShardsToNodeError(
+                                "Unable to parse slot.".to_string(),
+                            )
+                        })?;
+                        slot_to_node.insert(slot, node_key.clone());
+                    }
+                }
+            }
+        }
+
+        let mut node_to_shard = FxHashMap::default();
+        for shard in 0..=shards - 1 {
+            let keyslot: u16 = self
+                .client
+                .cluster_keyslot(&format!("{}", shard))
+                .await
+                .map_err(|err| RedisError::ClusterKeySlotError(err.to_string()))?;
+
+            match slot_to_node.get(&keyslot) {
+                Some(node) => node_to_shard
+                    .entry(node.clone())
+                    .or_insert(Vec::new())
+                    .push(shard),
+                None => {
+                    return Err(RedisError::ClusterKeySlotError(format!(
+                        "Unable to find node for keyslot : {}",
+                        keyslot,
+                    )))
+                }
+            }
+        }
+
+        Ok(node_to_shard)
     }
 }
