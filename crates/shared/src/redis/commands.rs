@@ -734,7 +734,10 @@ impl RedisConnectionPool {
     /// ```
     ///
     /// Note: This function will return an empty vector if the specified range does not contain any elements.
-    pub async fn lrange(&self, key: &str, min: i64, max: i64) -> Result<Vec<String>, RedisError> {
+    pub async fn lrange<T>(&self, key: &str, min: i64, max: i64) -> Result<Vec<T>, RedisError>
+    where
+        T: DeserializeOwned,
+    {
         let output = self
             .pool
             .lrange(key, min, max)
@@ -743,14 +746,23 @@ impl RedisConnectionPool {
 
         match output {
             RedisValue::Array(val) => {
-                let mut values = Vec::new();
-                for value in val {
-                    if let RedisValue::String(y) = value {
-                        values.push(String::from_utf8(y.into_inner().to_vec()).unwrap())
-                    }
-                }
-                Ok(values)
+                let results = val
+                    .into_iter()
+                    .map(|v| match v {
+                        RedisValue::String(s) => serde_json::from_str::<T>(&s)
+                            .map_err(|err| RedisError::DeserializationError(err.to_string())),
+                        case => Err(RedisError::LRangeFailed(format!(
+                            "Unexpected RedisValue encountered : {:?}",
+                            case
+                        ))),
+                    })
+                    .collect::<Result<Vec<T>, RedisError>>()?;
+                Ok(results)
             }
+            RedisValue::String(val) => serde_json::from_str::<T>(&val)
+                .map(|val| vec![val])
+                .map_err(|err| RedisError::DeserializationError(err.to_string())),
+            RedisValue::Null => Ok(vec![]),
             case => Err(RedisError::LRangeFailed(format!(
                 "Unexpected RedisValue encountered : {:?}",
                 case
