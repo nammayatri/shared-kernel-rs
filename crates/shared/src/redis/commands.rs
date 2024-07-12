@@ -7,8 +7,10 @@
 */
 #![allow(clippy::unwrap_used)]
 
+use crate::measure_latency_duration;
 use crate::redis::error::RedisError;
 use crate::redis::types::*;
+use crate::tools::prometheus::MEASURE_DURATION;
 use fred::{
     interfaces::{
         ClusterInterface, GeoInterface, HashesInterface, KeysInterface, SortedSetsInterface,
@@ -25,7 +27,7 @@ use fred::{
 use rustc_hash::FxHashMap;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{fmt::Debug, ops::Deref};
-use tracing::error;
+use tracing::*;
 
 impl RedisConnectionPool {
     /// Asynchronously sets a key-value pair in a Redis datastore with an expiry time.
@@ -50,6 +52,7 @@ impl RedisConnectionPool {
     /// This function will return an error:
     /// * If there is a failure in setting the value associated with the key in Redis.
     /// * If the value type `V` fails to convert into `RedisValue`.
+    #[macros::measure_duration]
     pub async fn set_key<V>(&self, key: &str, value: V, expiry: u32) -> Result<(), RedisError>
     where
         V: Serialize + Send + Sync,
@@ -71,6 +74,7 @@ impl RedisConnectionPool {
             .map_err(|err| RedisError::SetFailed(err.to_string()))
     }
 
+    #[macros::measure_duration]
     pub async fn set_key_as_str(
         &self,
         key: &str,
@@ -114,6 +118,7 @@ impl RedisConnectionPool {
     /// * If there is a failure in setting the value associated with the key or applying the expiration time in Redis.
     /// * If the value type `V` fails to convert into `RedisValue`.
     /// * If an unexpected case is encountered during the operation.
+    #[macros::measure_duration]
     pub async fn setnx_with_expiry<V>(
         &self,
         key: &str,
@@ -160,6 +165,7 @@ impl RedisConnectionPool {
     ///
     /// # Errors
     /// This function will return an error if there is a failure in applying the expiration time to the key in Redis.
+    #[macros::measure_duration]
     pub async fn set_expiry(&self, key: &str, seconds: i64) -> Result<(), RedisError> {
         let output: Result<(), _> = self.pool.expire(key, seconds).await;
 
@@ -187,6 +193,7 @@ impl RedisConnectionPool {
     ///
     /// # Errors
     /// This function will return an error if there is a failure in retrieving the value associated with the key from Redis.
+    #[macros::measure_duration]
     pub async fn get_key<T>(&self, key: &str) -> Result<Option<T>, RedisError>
     where
         T: DeserializeOwned,
@@ -227,6 +234,7 @@ impl RedisConnectionPool {
     /// This function will return an `RedisError::GetFailed` error in the following cases:
     /// - If the Redis query itself fails for any reason (e.g., connection issues).
     /// - If the value retrieved is not a string or is another data type not expected.
+    #[macros::measure_duration]
     pub async fn get_key_as_str(&self, key: &str) -> Result<Option<String>, RedisError> {
         let output: RedisValue = self
             .pool
@@ -264,6 +272,7 @@ impl RedisConnectionPool {
     ///
     /// # Errors
     /// This function will return an error if there is a failure in retrieving the values associated with the keys from Redis.
+    #[macros::measure_duration]
     pub async fn mget_keys<T>(&self, keys: Vec<String>) -> Result<Vec<Option<T>>, RedisError>
     where
         T: DeserializeOwned,
@@ -329,6 +338,7 @@ impl RedisConnectionPool {
     ///     Err(e) => println!("An error occurred: {:?}", e),
     /// }
     /// ```
+    #[macros::measure_duration]
     pub async fn delete_key(&self, key: &str) -> Result<(), RedisError> {
         self.pool
             .del(key)
@@ -357,6 +367,7 @@ impl RedisConnectionPool {
     ///     Err(e) => println!("An error occurred: {:?}", e),
     /// }
     /// ```
+    #[macros::measure_duration]
     pub async fn delete_keys(&self, keys: Vec<&str>) -> Result<(), RedisError> {
         let pipeline = self.pool.pipeline();
 
@@ -401,6 +412,7 @@ impl RedisConnectionPool {
     ///     Err(e) => println!("An error occurred: {:?}", e),
     /// }
     /// ```
+    #[macros::measure_duration]
     pub async fn set_hash_fields<V>(
         &self,
         key: &str,
@@ -447,6 +459,7 @@ impl RedisConnectionPool {
     ///     Err(e) => println!("An error occurred: {:?}", e),
     /// }
     /// ```
+    #[macros::measure_duration]
     pub async fn get_hash_field<V>(&self, key: &str, field: &str) -> Result<V, RedisError>
     where
         V: FromRedis + Unpin + Send + 'static,
@@ -483,6 +496,7 @@ impl RedisConnectionPool {
     ///     Err(e) => println!("An error occurred: {:?}", e),
     /// }
     /// ```
+    #[macros::measure_duration]
     pub async fn rpush<V>(&self, key: &str, values: Vec<V>) -> Result<i64, RedisError>
     where
         V: Serialize + Debug + Send + Sync + Clone,
@@ -543,6 +557,7 @@ impl RedisConnectionPool {
     ///     Err(e) => println!("An error occurred: {:?}", e),
     /// }
     /// ```
+    #[macros::measure_duration]
     pub async fn rpush_with_expiry<V>(
         &self,
         key: &str,
@@ -608,6 +623,7 @@ impl RedisConnectionPool {
     ///     Err(e) => println!("An error occurred: {:?}", e),
     /// }
     /// ```
+    #[macros::measure_duration]
     pub async fn rpop<T>(&self, key: &str, count: Option<usize>) -> Result<Vec<T>, RedisError>
     where
         T: DeserializeOwned,
@@ -670,6 +686,7 @@ impl RedisConnectionPool {
     /// ```
     ///
     /// Note: This function will return an empty vector if the list is empty or the key does not exist.
+    #[macros::measure_duration]
     pub async fn lpop<T>(&self, key: &str, count: Option<usize>) -> Result<Vec<T>, RedisError>
     where
         T: DeserializeOwned,
@@ -734,6 +751,7 @@ impl RedisConnectionPool {
     /// ```
     ///
     /// Note: This function will return an empty vector if the specified range does not contain any elements.
+    #[macros::measure_duration]
     pub async fn lrange<T>(&self, key: &str, min: i64, max: i64) -> Result<Vec<T>, RedisError>
     where
         T: DeserializeOwned,
@@ -794,6 +812,7 @@ impl RedisConnectionPool {
     /// ```
     ///
     /// Note: This function will return 0 if the list does not exist.
+    #[macros::measure_duration]
     pub async fn llen(&self, key: &str) -> Result<i64, RedisError> {
         let output = self
             .pool
@@ -846,6 +865,7 @@ impl RedisConnectionPool {
     ///
     /// This function will return an `Err` variant of `RedisError` with `GeoAddFailed` containing
     /// an error message if the Redis operation fails.
+    #[macros::measure_duration]
     pub async fn geo_add<V>(
         &self,
         key: &str,
@@ -882,6 +902,7 @@ impl RedisConnectionPool {
     /// If successful, the function returns `Ok(())`, indicating that the geospatial items were added
     /// to the key and the expiry was set. If an error occurs, it returns an `Err(RedisError)` variant
     /// indicating the type of error.
+    #[macros::measure_duration]
     pub async fn geo_add_with_expiry<V>(
         &self,
         key: &str,
@@ -939,6 +960,7 @@ impl RedisConnectionPool {
     /// atomicity of the batch operation, but network issues can still lead to panics.
     /// Proper error handling is implemented to try to return an error variant instead
     /// of panicking.
+    #[macros::measure_duration]
     pub async fn mgeo_add_with_expiry(
         &self,
         mval: &FxHashMap<String, Vec<GeoValue>>,
@@ -1002,6 +1024,7 @@ impl RedisConnectionPool {
     /// Redis connection or internal errors from the Redis library may cause a panic. It is recommended
     /// to use a panic handler or similar safety net in production environments.
     #[allow(clippy::too_many_arguments)]
+    #[macros::measure_duration]
     pub async fn geo_search(
         &self,
         key: &str,
@@ -1044,6 +1067,7 @@ impl RedisConnectionPool {
     /// # Errors
     /// Returns `RedisError::GeoSearchFailed` if the Redis search fails or if an unexpected value is encountered.
     #[allow(clippy::too_many_arguments)]
+    #[macros::measure_duration]
     pub async fn mgeo_search(
         &self,
         keys: Vec<String>,
@@ -1101,6 +1125,7 @@ impl RedisConnectionPool {
         Ok(geovals)
     }
 
+    #[macros::measure_duration]
     pub async fn geopos(&self, key: &str, members: Vec<String>) -> Result<Vec<Point>, RedisError> {
         let output = self
             .pool
@@ -1164,6 +1189,7 @@ impl RedisConnectionPool {
     ///
     /// let _ = zremrange_by_rank("sample_key", 0, 2).await?;
     /// ```
+    #[macros::measure_duration]
     pub async fn zremrange_by_rank(
         &self,
         key: &str,
@@ -1201,6 +1227,7 @@ impl RedisConnectionPool {
     ///
     /// let _ = zadd("sample_key", None, None, false, false, vec![(1.0, "member1"), (2.0, "member2")]).await?;
     /// ```
+    #[macros::measure_duration]
     pub async fn zadd(
         &self,
         key: &str,
@@ -1237,6 +1264,7 @@ impl RedisConnectionPool {
     /// let count = zcard("sample_key").await?;
     /// println!("Number of members in sorted set: {}", count);
     /// ```
+    #[macros::measure_duration]
     pub async fn zcard(&self, key: &str) -> Result<u64, RedisError> {
         self.pool
             .zcard(key)
@@ -1274,6 +1302,7 @@ impl RedisConnectionPool {
     /// println!("{:?}", members);
     /// ```
     #[allow(clippy::too_many_arguments)]
+    #[macros::measure_duration]
     pub async fn zrange<T>(
         &self,
         key: &str,
@@ -1318,6 +1347,7 @@ impl RedisConnectionPool {
         }
     }
 
+    #[macros::measure_duration]
     pub async fn xadd<F, V>(
         &self,
         key: &str,
@@ -1347,6 +1377,7 @@ impl RedisConnectionPool {
         Ok(())
     }
 
+    #[macros::measure_duration]
     pub async fn xread(
         &self,
         keys: Vec<String>,
@@ -1416,6 +1447,7 @@ impl RedisConnectionPool {
         }
     }
 
+    #[macros::measure_duration]
     pub async fn xdel(&self, key: &str, id: &str) -> Result<(), RedisError> {
         self.pool
             .xdel(key, id)
@@ -1425,6 +1457,7 @@ impl RedisConnectionPool {
 }
 
 impl RedisClient {
+    #[macros::measure_duration]
     pub async fn node_to_shard_mapping(
         &self,
         shards: u64,

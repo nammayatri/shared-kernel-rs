@@ -11,3 +11,4 @@
 #![deny(clippy::panic)]
 
 pub mod redis;
+pub mod tools;

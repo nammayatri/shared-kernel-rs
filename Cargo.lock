@@ -182,6 +182,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "actix-web-prom"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f23f332a652836b8f3a6876103c70c9ed436d0e69fa779ab5d7f57b1d5c8d488"
+dependencies = [
+ "actix-web",
+ "futures-core",
+ "pin-project-lite",
+ "prometheus",
+ "regex",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1629,6 +1642,7 @@ name = "shared"
 version = "0.1.0"
 dependencies = [
  "actix-web",
+ "actix-web-prom",
  "async-trait",
  "error-stack",
  "fred",
