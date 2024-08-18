@@ -131,7 +131,7 @@ pub async fn call_api<T, U>(
     body: Option<U>,
 ) -> Result<T, CallAPIError>
 where
-    T: DeserializeOwned,
+    T: DeserializeOwned + 'static,
     U: Serialize + Debug,
 {
     let start_time = std::time::Instant::now();
@@ -200,10 +200,16 @@ where
         Ok(resp) => {
             if resp.status().is_success() {
                 info!(tag = "[OUTGOING API]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = format!("{:?}", header_map), response = format!("{:?}", resp), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
-                Ok(resp
-                    .json::<T>()
-                    .await
-                    .map_err(|err| CallAPIError::DeserializationError(err.to_string()))?)
+
+                // If T is (), we don't need to deserialize, just return Ok(())
+                if std::any::TypeId::of::<T>() == std::any::TypeId::of::<()>() {
+                    Ok(unsafe { std::mem::zeroed() })
+                } else {
+                    Ok(resp
+                        .json::<T>()
+                        .await
+                        .map_err(|err| CallAPIError::DeserializationError(err.to_string()))?)
+                }
             } else {
                 error!(tag = "[OUTGOING API - ERROR]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = format!("{:?}", header_map), error = format!("{:?}", resp), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
                 Err(CallAPIError::ExternalAPICallError(
@@ -269,7 +275,7 @@ pub async fn call_api_unwrapping_error<T, U, E>(
     error_handler: Box<dyn Fn(Response) -> E>,
 ) -> Result<T, E>
 where
-    T: DeserializeOwned,
+    T: DeserializeOwned + 'static,
     U: Serialize + Debug,
     E: ResponseError + convert::From<CallAPIError>,
 {
@@ -337,10 +343,16 @@ where
         Ok(resp) => {
             if resp.status().is_success() {
                 info!(tag = "[OUTGOING API]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = format!("{:?}", header_map), response = format!("{:?}", resp), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
-                Ok(resp
-                    .json::<T>()
-                    .await
-                    .map_err(|err| CallAPIError::DeserializationError(err.to_string()))?)
+
+                // If T is (), we don't need to deserialize, just return Ok(())
+                if std::any::TypeId::of::<T>() == std::any::TypeId::of::<()>() {
+                    Ok(unsafe { std::mem::zeroed() })
+                } else {
+                    Ok(resp
+                        .json::<T>()
+                        .await
+                        .map_err(|err| CallAPIError::DeserializationError(err.to_string()))?)
+                }
             } else {
                 error!(tag = "[OUTGOING API - ERROR]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = format!("{:?}", header_map), error = format!("{:?}", resp), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
                 Err(error_handler(resp))
