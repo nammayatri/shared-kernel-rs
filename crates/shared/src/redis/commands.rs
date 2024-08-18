@@ -62,7 +62,7 @@ impl RedisConnectionPool {
 
         let redis_value: RedisValue = serialized_value.into();
 
-        self.pool
+        self.writer_pool
             .set(
                 key,
                 redis_value,
@@ -82,7 +82,7 @@ impl RedisConnectionPool {
         expiry: u32,
     ) -> Result<(), RedisError> {
         let redis_value: RedisValue = value.into();
-        self.pool
+        self.writer_pool
             .set(
                 key,
                 redis_value,
@@ -129,7 +129,7 @@ impl RedisConnectionPool {
         V: TryInto<RedisValue> + Debug + Send + Sync,
         V::Error: Into<fred::error::RedisError> + Send + Sync,
     {
-        let pipeline = self.pool.pipeline();
+        let pipeline = self.writer_pool.pipeline();
 
         let _ = pipeline.msetnx::<RedisValue, _>((key, value)).await;
         let _ = pipeline.expire::<(), &str>(key, expiry).await;
@@ -167,7 +167,7 @@ impl RedisConnectionPool {
     /// This function will return an error if there is a failure in applying the expiration time to the key in Redis.
     #[macros::measure_duration]
     pub async fn set_expiry(&self, key: &str, seconds: i64) -> Result<(), RedisError> {
-        let output: Result<(), _> = self.pool.expire(key, seconds).await;
+        let output: Result<(), _> = self.writer_pool.expire(key, seconds).await;
 
         if let Err(err) = output {
             Err(RedisError::SetExpiryFailed(err.to_string()))
@@ -199,7 +199,7 @@ impl RedisConnectionPool {
         T: DeserializeOwned,
     {
         let output: RedisValue = self
-            .pool
+            .reader_pool
             .get(key)
             .await
             .map_err(|err| RedisError::GetFailed(err.to_string()))?;
@@ -237,7 +237,7 @@ impl RedisConnectionPool {
     #[macros::measure_duration]
     pub async fn get_key_as_str(&self, key: &str) -> Result<Option<String>, RedisError> {
         let output: RedisValue = self
-            .pool
+            .reader_pool
             .get(key)
             .await
             .map_err(|err| RedisError::GetFailed(err.to_string()))?;
@@ -284,7 +284,7 @@ impl RedisConnectionPool {
         let keys: Vec<RedisKey> = keys.into_iter().map(RedisKey::from).collect();
 
         let output: RedisValue = self
-            .pool
+            .reader_pool
             .mget(MultipleKeys::from(keys))
             .await
             .map_err(|err| RedisError::MGetFailed(err.to_string()))?;
@@ -340,7 +340,7 @@ impl RedisConnectionPool {
     /// ```
     #[macros::measure_duration]
     pub async fn delete_key(&self, key: &str) -> Result<(), RedisError> {
-        self.pool
+        self.writer_pool
             .del(key)
             .await
             .map_err(|err| RedisError::DeleteFailed(err.to_string()))
@@ -369,7 +369,7 @@ impl RedisConnectionPool {
     /// ```
     #[macros::measure_duration]
     pub async fn delete_keys(&self, keys: Vec<&str>) -> Result<(), RedisError> {
-        let pipeline = self.pool.pipeline();
+        let pipeline = self.writer_pool.pipeline();
 
         for key in keys {
             let _ = pipeline.del::<RedisValue, &str>(key).await;
@@ -423,7 +423,7 @@ impl RedisConnectionPool {
         V: TryInto<RedisMap> + Debug + Send + Sync,
         V::Error: Into<fred::error::RedisError> + Send + Sync,
     {
-        self.pool
+        self.writer_pool
             .hset(key, values)
             .await
             .map_err(|err| RedisError::SetHashFieldFailed(err.to_string()))?;
@@ -464,7 +464,7 @@ impl RedisConnectionPool {
     where
         V: FromRedis + Unpin + Send + 'static,
     {
-        self.pool
+        self.reader_pool
             .hget(key, field)
             .await
             .map_err(|err| RedisError::GetHashFieldFailed(err.to_string()))
@@ -515,7 +515,7 @@ impl RedisConnectionPool {
             .collect::<Result<Vec<RedisValue>, RedisError>>()?;
 
         let output = self
-            .pool
+            .writer_pool
             .rpush(key, serialized_value)
             .await
             .map_err(|err| RedisError::RPushFailed(err.to_string()))?;
@@ -571,7 +571,7 @@ impl RedisConnectionPool {
             return self.llen(key).await;
         }
 
-        let pipeline = self.pool.pipeline();
+        let pipeline = self.writer_pool.pipeline();
 
         let serialized_value = values
             .iter()
@@ -629,7 +629,7 @@ impl RedisConnectionPool {
         T: DeserializeOwned,
     {
         let output = self
-            .pool
+            .writer_pool
             .rpop(key, count)
             .await
             .map_err(|err| RedisError::RPopFailed(err.to_string()))?;
@@ -692,7 +692,7 @@ impl RedisConnectionPool {
         T: DeserializeOwned,
     {
         let output = self
-            .pool
+            .writer_pool
             .lpop(key, count)
             .await
             .map_err(|err| RedisError::LPopFailed(err.to_string()))?;
@@ -757,7 +757,7 @@ impl RedisConnectionPool {
         T: DeserializeOwned,
     {
         let output = self
-            .pool
+            .reader_pool
             .lrange(key, min, max)
             .await
             .map_err(|err| RedisError::LRangeFailed(err.to_string()))?;
@@ -815,7 +815,7 @@ impl RedisConnectionPool {
     #[macros::measure_duration]
     pub async fn llen(&self, key: &str) -> Result<i64, RedisError> {
         let output = self
-            .pool
+            .reader_pool
             .llen(key)
             .await
             .map_err(|err| RedisError::LLenFailed(err.to_string()))?;
@@ -876,7 +876,7 @@ impl RedisConnectionPool {
     where
         V: Into<MultipleGeoValues> + Send + Debug,
     {
-        self.pool
+        self.writer_pool
             .geoadd(key, options, changed, values)
             .await
             .map_err(|err| RedisError::GeoAddFailed(err.to_string()))
@@ -914,7 +914,7 @@ impl RedisConnectionPool {
     where
         V: Into<MultipleGeoValues> + Send + Debug,
     {
-        let pipeline = self.pool.pipeline();
+        let pipeline = self.writer_pool.pipeline();
 
         let _ = pipeline
             .geoadd::<RedisValue, &str, V>(key, options, changed, values)
@@ -968,7 +968,7 @@ impl RedisConnectionPool {
         changed: bool,
         expiry: i64,
     ) -> Result<(), RedisError> {
-        let pipeline = self.pool.pipeline();
+        let pipeline = self.writer_pool.pipeline();
 
         for (key, values) in mval.iter() {
             let _ = pipeline
@@ -1032,7 +1032,7 @@ impl RedisConnectionPool {
         by_radius: (f64, GeoUnit),
         ord: SortOrder,
     ) -> Result<Vec<GeoRadiusInfo>, RedisError> {
-        self.pool
+        self.reader_pool
             .geosearch(
                 key,
                 None,
@@ -1075,7 +1075,7 @@ impl RedisConnectionPool {
         by_radius: (f64, GeoUnit),
         ord: SortOrder,
     ) -> Result<Vec<Option<(String, Point)>>, RedisError> {
-        let pipeline = self.pool.pipeline();
+        let pipeline = self.reader_pool.pipeline();
 
         for key in keys {
             let _ = pipeline
@@ -1128,7 +1128,7 @@ impl RedisConnectionPool {
     #[macros::measure_duration]
     pub async fn geopos(&self, key: &str, members: Vec<String>) -> Result<Vec<Point>, RedisError> {
         let output = self
-            .pool
+            .reader_pool
             .geopos(key, members)
             .await
             .map_err(|err| RedisError::GeoPosFailed(err.to_string()))?;
@@ -1196,7 +1196,7 @@ impl RedisConnectionPool {
         start: i64,
         stop: i64,
     ) -> Result<(), RedisError> {
-        self.pool
+        self.writer_pool
             .zremrangebyrank(key, start, stop)
             .await
             .map_err(|err| RedisError::ZremrangeByRankFailed(err.to_string()))
@@ -1237,7 +1237,7 @@ impl RedisConnectionPool {
         incr: bool,
         values: Vec<(f64, &str)>,
     ) -> Result<(), RedisError> {
-        self.pool
+        self.writer_pool
             .zadd(key, options, ordering, changed, incr, values)
             .await
             .map_err(|err| RedisError::ZAddFailed(err.to_string()))
@@ -1266,7 +1266,7 @@ impl RedisConnectionPool {
     /// ```
     #[macros::measure_duration]
     pub async fn zcard(&self, key: &str) -> Result<u64, RedisError> {
-        self.pool
+        self.reader_pool
             .zcard(key)
             .await
             .map_err(|err| RedisError::ZCardFailed(err.to_string()))
@@ -1317,7 +1317,7 @@ impl RedisConnectionPool {
         T: DeserializeOwned,
     {
         let output = self
-            .pool
+            .reader_pool
             .zrange(key, min, max, sort, rev, limit, withscores)
             .await
             .map_err(|err| RedisError::ZRangeFailed(err.to_string()))?;
@@ -1358,7 +1358,7 @@ impl RedisConnectionPool {
         F: Into<RedisKey> + Send,
         V: Into<RedisValue> + Send,
     {
-        self.pool
+        self.writer_pool
             .xadd(
                 key,
                 false,
@@ -1385,7 +1385,7 @@ impl RedisConnectionPool {
         count: Option<u64>,
     ) -> Result<FxHashMap<String, Vec<Vec<(String, String)>>>, RedisError> {
         let output: RedisValue = self
-            .pool
+            .reader_pool
             .xread(
                 count,
                 None,
@@ -1449,7 +1449,7 @@ impl RedisConnectionPool {
 
     #[macros::measure_duration]
     pub async fn xdel(&self, key: &str, id: &str) -> Result<(), RedisError> {
-        self.pool
+        self.writer_pool
             .xdel(key, id)
             .await
             .map_err(|err| RedisError::XDeleteFailed(err.to_string()))

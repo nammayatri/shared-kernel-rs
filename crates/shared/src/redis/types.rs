@@ -162,8 +162,8 @@ impl RedisClient {
 }
 
 pub struct RedisConnectionPool {
-    pub pool: fred::pool::RedisPool,
-    pub migration_pool: Option<fred::pool::RedisPool>,
+    pub reader_pool: fred::pool::RedisPool,
+    pub writer_pool: fred::pool::RedisPool,
     join_handles: Vec<fred::types::ConnectHandle>,
     is_redis_available: Arc<atomic::AtomicBool>,
 }
@@ -172,29 +172,26 @@ impl RedisConnectionPool {
     /// Create a new Redis connection
     pub async fn new(
         conf: RedisSettings,
-        migration_conf: Option<RedisSettings>,
+        replica_conf: Option<RedisSettings>,
     ) -> Result<Self, RedisError> {
-        let (pool, mut join_handles) = Self::instantiate(&conf).await?;
-
-        if let Some(migration_conf) = migration_conf {
-            let (migration_pool, migration_join_handles) =
-                Self::instantiate(&migration_conf).await?;
-            join_handles.extend(migration_join_handles);
-            Ok(Self {
-                pool,
-                migration_pool: Some(migration_pool),
-                join_handles,
-                is_redis_available: Arc::new(atomic::AtomicBool::new(true)),
-            })
+        let (reader_pool, writer_pool, join_handles) = if let Some(replica_conf) = replica_conf {
+            let (writer_pool, mut join_handles) = Self::instantiate(&conf).await?;
+            let (reader_pool, reader_join_handles) = Self::instantiate(&replica_conf).await?;
+            join_handles.extend(reader_join_handles);
+            (reader_pool, writer_pool, join_handles)
         } else {
-            Ok(Self {
-                pool,
+            let (writer_pool, mut join_handles) = Self::instantiate(&conf).await?;
+            let (reader_pool, reader_join_handles) = Self::instantiate(&conf).await?;
+            join_handles.extend(reader_join_handles);
+            (reader_pool, writer_pool, join_handles)
+        };
 
-                migration_pool: None,
-                join_handles,
-                is_redis_available: Arc::new(atomic::AtomicBool::new(true)),
-            })
-        }
+        Ok(Self {
+            reader_pool,
+            writer_pool,
+            join_handles,
+            is_redis_available: Arc::new(atomic::AtomicBool::new(true)),
+        })
     }
     async fn instantiate(
         conf: &RedisSettings,
@@ -245,7 +242,8 @@ impl RedisConnectionPool {
     }
 
     pub async fn close_connections(&mut self) {
-        self.pool.quit_pool().await;
+        self.writer_pool.quit_pool().await;
+        self.reader_pool.quit_pool().await;
         for handle in self.join_handles.drain(..) {
             match handle.await {
                 Ok(Ok(_)) => (),
@@ -255,9 +253,17 @@ impl RedisConnectionPool {
         }
     }
     pub async fn on_error(&self) {
-        while let Ok(redis_error) = self.pool.on_error().recv().await {
+        while let Ok(redis_error) = self.reader_pool.on_error().recv().await {
             error!(?redis_error, "Redis protocol or connection error");
-            if self.pool.state() == fred::types::ClientState::Disconnected {
+            if self.reader_pool.state() == fred::types::ClientState::Disconnected {
+                self.is_redis_available
+                    .store(false, atomic::Ordering::SeqCst);
+            }
+        }
+
+        while let Ok(redis_error) = self.writer_pool.on_error().recv().await {
+            error!(?redis_error, "Redis protocol or connection error");
+            if self.writer_pool.state() == fred::types::ClientState::Disconnected {
                 self.is_redis_available
                     .store(false, atomic::Ordering::SeqCst);
             }
