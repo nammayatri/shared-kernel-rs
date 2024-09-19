@@ -25,6 +25,13 @@ pub struct Point {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub enum Ttl {
+    TtlValue(i64),
+    NoExpiry,
+    NoKeyFound,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 #[serde(default)]
 pub struct RedisSettings {
     pub host: String,

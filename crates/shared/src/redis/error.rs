@@ -24,6 +24,7 @@ pub enum RedisError {
     SerializationError(String),
     DeserializationError(String),
     RedisConnectionError(String),
+    TtlFailed(String),
     SetFailed(String),
     SetExFailed(String),
     SetExpiryFailed(String),
@@ -69,6 +70,7 @@ impl RedisError {
             RedisError::SerializationError(err) => err.to_string(),
             RedisError::DeserializationError(err) => err.to_string(),
             RedisError::RedisConnectionError(err) => format!("Redis Connection Error : {err}"),
+            RedisError::TtlFailed(err) => format!("Redis Error : {err}"),
             RedisError::SetFailed(err) => format!("Redis Error : {err}"),
             RedisError::SetExFailed(err) => format!("Redis Error : {err}"),
             RedisError::SetExpiryFailed(err) => format!("Redis Error : {err}"),
@@ -102,6 +104,7 @@ impl RedisError {
         match self {
             RedisError::SerializationError(_) => "SERIALIZATION_ERROR",
             RedisError::DeserializationError(_) => "DESERIALIZATION_ERROR",
+            RedisError::TtlFailed(_) => "TTL_FAILED",
             RedisError::SetFailed(_) => "SET_FAILED",
             RedisError::SetExFailed(_) => "SET_EX_FAILED",
             RedisError::SetExpiryFailed(_) => "SET_EXPIRY_FAILED",
@@ -149,6 +152,7 @@ impl ResponseError for RedisError {
         match self {
             RedisError::SerializationError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             RedisError::DeserializationError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            RedisError::TtlFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
             RedisError::SetFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
             RedisError::SetExFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
             RedisError::SetExpiryFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
