@@ -129,24 +129,42 @@ impl RedisConnectionPool {
         V: TryInto<RedisValue> + Debug + Send + Sync,
         V::Error: Into<fred::error::RedisError> + Send + Sync,
     {
-        let pipeline = self.writer_pool.pipeline();
-
-        let _ = pipeline.msetnx::<RedisValue, _>((key, value)).await;
-        let _ = pipeline.expire::<(), &str>(key, expiry).await;
-
-        let output: Vec<RedisValue> = pipeline
-            .all()
+        let ttl: RedisValue = self
+            .writer_pool
+            .ttl(key)
             .await
             .map_err(|err| RedisError::SetExFailed(err.to_string()))?;
+        warn!("Hello Jaypool: {:?}", ttl);
+        match ttl.as_i64() {
+            Some(piyush) => {
+                if piyush < 0 {
+                    let pipeline = self.writer_pool.pipeline();
+                    let _ = pipeline.msetnx::<RedisValue, _>((key, value)).await;
+                    let _ = pipeline.expire::<(), &str>(key, expiry).await;
 
-        match output.deref() {
-            [RedisValue::Integer(1), ..] => Ok(true),
-            [RedisValue::Integer(0), ..] => Ok(false),
-            case => Err(RedisError::SetExFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
-                case
-            ))),
+                    let output: Vec<RedisValue> = pipeline
+                        .all()
+                        .await
+                        .map_err(|err| RedisError::SetExFailed(err.to_string()))?;
+
+                    match output.deref() {
+                        [RedisValue::Integer(1), ..] => Ok(true),
+                        [RedisValue::Integer(0), ..] => Ok(false),
+                        case => Err(RedisError::SetExFailed(format!(
+                            "Unexpected RedisValue encountered : {:?}",
+                            case
+                        ))),
+                    }
+                } else {
+                    Ok(false)
+                }
+            }
+            _ => Ok(false),
         }
+        // if ttl < 0 {
+        // } else {
+        //     Ok(false)
+        // }
     }
 
     /// Asynchronously sets an expiration time for a given key in a Redis datastore.
