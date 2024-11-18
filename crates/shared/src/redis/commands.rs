@@ -94,6 +94,31 @@ impl RedisConnectionPool {
             .map_err(|err| RedisError::SetFailed(err.to_string()))
     }
 
+    #[macros::measure_duration]
+    pub async fn ttl(&self, key: &str) -> Result<Ttl, RedisError> {
+        let output: RedisValue = self
+            .reader_pool
+            .ttl(key)
+            .await
+            .map_err(|err| RedisError::TtlFailed(err.to_string()))?;
+
+        match output.as_i64() {
+            Some(output) => {
+                if output == -1 {
+                    Ok(Ttl::NoExpiry)
+                } else if output == -2 {
+                    Ok(Ttl::NoKeyFound)
+                } else {
+                    Ok(Ttl::TtlValue(output))
+                }
+            }
+            None => Err(RedisError::TtlFailed(format!(
+                "Unexpected RedisValue encountered : {:?}",
+                output
+            ))),
+        }
+    }
+
     /// Asynchronously sets a key-value pair in a Redis datastore with an expiry time, only if the key does not already exist.
     ///
     /// This function aims to perform a conditional set operation (SETNX) followed by setting an expiration time on the key.
@@ -130,7 +155,6 @@ impl RedisConnectionPool {
         V::Error: Into<fred::error::RedisError> + Send + Sync,
     {
         let pipeline = self.writer_pool.pipeline();
-
         let _ = pipeline.msetnx::<RedisValue, _>((key, value)).await;
         let _ = pipeline.expire::<(), &str>(key, expiry).await;
 
