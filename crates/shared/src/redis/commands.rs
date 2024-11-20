@@ -12,21 +12,18 @@ use crate::redis::error::RedisError;
 use crate::redis::types::*;
 use crate::tools::prometheus::MEASURE_DURATION;
 use fred::{
-    interfaces::{
-        ClusterInterface, GeoInterface, HashesInterface, KeysInterface, SortedSetsInterface,
-        StreamsInterface,
+    prelude::{
+        ClusterInterface, GeoInterface, HashesInterface, KeysInterface, ListInterface,
+        SortedSetsInterface, StreamsInterface,
     },
-    prelude::ListInterface,
     types::{
-        Expiration, FromRedis, GeoPosition, GeoRadiusInfo, GeoUnit, GeoValue, Limit,
-        MultipleGeoValues, MultipleKeys, Ordering, RedisKey, RedisMap, RedisValue, SetOptions,
-        SortOrder, StringOrNumber, XCapKind, XCapTrim, ZSort,
         XID::{self, Auto, Manual},
+        *,
     },
 };
 use rustc_hash::FxHashMap;
 use serde::{de::DeserializeOwned, Serialize};
-use std::{fmt::Debug, ops::Deref};
+use std::{collections::HashMap, fmt::Debug, ops::Deref};
 use tracing::*;
 
 impl RedisConnectionPool {
@@ -154,7 +151,7 @@ impl RedisConnectionPool {
         V: TryInto<RedisValue> + Debug + Send + Sync,
         V::Error: Into<fred::error::RedisError> + Send + Sync,
     {
-        let pipeline = self.writer_pool.pipeline();
+        let pipeline = self.writer_pool.next().pipeline();
         let _ = pipeline.msetnx::<RedisValue, _>((key, value)).await;
         let _ = pipeline.expire::<(), &str>(key, expiry).await;
 
@@ -393,7 +390,7 @@ impl RedisConnectionPool {
     /// ```
     #[macros::measure_duration]
     pub async fn delete_keys(&self, keys: Vec<&str>) -> Result<(), RedisError> {
-        let pipeline = self.writer_pool.pipeline();
+        let pipeline = self.writer_pool.next().pipeline();
 
         for key in keys {
             let _ = pipeline.del::<RedisValue, &str>(key).await;
@@ -437,23 +434,74 @@ impl RedisConnectionPool {
     /// }
     /// ```
     #[macros::measure_duration]
-    pub async fn set_hash_fields<V>(
+    pub async fn set_hash_fields_with_hashmap_expiry<V>(
         &self,
         key: &str,
-        values: V,
+        values: Vec<(String, V)>,
         expiry: i64,
     ) -> Result<(), RedisError>
     where
-        V: TryInto<RedisMap> + Debug + Send + Sync,
-        V::Error: Into<fred::error::RedisError> + Send + Sync,
+        V: Serialize + Debug + Send + Sync + Clone,
     {
-        self.writer_pool
-            .hset(key, values)
-            .await
-            .map_err(|err| RedisError::SetHashFieldFailed(err.to_string()))?;
+        let serialized_value: Vec<(String, RedisValue)> = values
+            .into_iter()
+            .map(|(field, value)| {
+                serde_json::to_string(&value)
+                    .map(|value| (field, value.into()))
+                    .map_err(|err| RedisError::SerializationError(err.to_string()))
+            })
+            .collect::<Result<_, _>>()?;
 
-        self.set_expiry(key, expiry).await?;
-        Ok(())
+        let pipeline = self.writer_pool.next().pipeline();
+        let _ = pipeline
+            .hset::<(), &str, Vec<(String, RedisValue)>>(key, serialized_value)
+            .await;
+        let _ = pipeline.expire::<(), &str>(key, expiry).await;
+
+        pipeline
+            .all()
+            .await
+            .map_err(|err| RedisError::SetHashFieldFailed(err.to_string()))
+    }
+
+    #[macros::measure_duration]
+    pub async fn set_hash_fields_with_fields_expiry<V>(
+        &self,
+        key: &str,
+        values: Vec<(String, V)>,
+        expiry: i64,
+    ) -> Result<(), RedisError>
+    where
+        V: Serialize + Debug + Send + Sync + Clone,
+    {
+        let serialized_value: Vec<(String, RedisValue)> = values
+            .into_iter()
+            .map(|(field, value)| {
+                serde_json::to_string(&value)
+                    .map(|value| (field, value.into()))
+                    .map_err(|err| RedisError::SerializationError(err.to_string()))
+            })
+            .collect::<Result<_, _>>()?;
+
+        let fields: Vec<String> = serialized_value
+            .iter()
+            .map(|(field, _)| field.to_owned())
+            .collect();
+
+        let pipeline = self.writer_pool.next().pipeline();
+        let _ = pipeline
+            .hset::<(), &str, Vec<(String, RedisValue)>>(key, serialized_value)
+            .await;
+
+        // Will work only on Redis Version Upgrade >= 7.4.0
+        let _ = pipeline
+            .hexpire::<(), &str, Vec<String>>(key, expiry, None, fields)
+            .await;
+
+        pipeline
+            .all()
+            .await
+            .map_err(|err| RedisError::SetHashFieldFailed(err.to_string()))
     }
 
     /// Retrieves a field value from a hash in the Redis store.
@@ -492,6 +540,44 @@ impl RedisConnectionPool {
             .hget(key, field)
             .await
             .map_err(|err| RedisError::GetHashFieldFailed(err.to_string()))
+    }
+
+    #[macros::measure_duration]
+    pub async fn get_all_hash_fields<T>(&self, key: &str) -> Result<HashMap<String, T>, RedisError>
+    where
+        T: DeserializeOwned,
+    {
+        let output: RedisValue = self
+            .reader_pool
+            .hgetall(key)
+            .await
+            .map_err(|err| RedisError::GetHashFieldFailed(err.to_string()))?;
+
+        match output {
+            RedisValue::Map(redis_map) => {
+                let result = redis_map
+                    .iter()
+                    .map(|(key, value)| {
+                        if let (Some(key), RedisValue::String(value)) = (key.as_str(), value) {
+                            let key = key.to_string();
+                            let value = serde_json::from_str::<T>(&value.to_string())
+                                .map_err(|err| RedisError::DeserializationError(err.to_string()))?;
+                            Ok((key, value))
+                        } else {
+                            Err(RedisError::GetHashFieldFailed(format!(
+                                "Unexpected RedisValue encountered"
+                            )))
+                        }
+                    })
+                    .collect::<Result<HashMap<String, T>, RedisError>>()?;
+
+                Ok(result)
+            }
+            case => Err(RedisError::GetHashFieldFailed(format!(
+                "Unexpected RedisValue encountered : {:?}",
+                case
+            ))),
+        }
     }
 
     /// Appends one or multiple values to the end of a list in the Redis store.
@@ -595,7 +681,7 @@ impl RedisConnectionPool {
             return self.llen(key).await;
         }
 
-        let pipeline = self.writer_pool.pipeline();
+        let pipeline = self.writer_pool.next().pipeline();
 
         let serialized_value = values
             .iter()
@@ -938,7 +1024,7 @@ impl RedisConnectionPool {
     where
         V: Into<MultipleGeoValues> + Send + Debug,
     {
-        let pipeline = self.writer_pool.pipeline();
+        let pipeline = self.writer_pool.next().pipeline();
 
         let _ = pipeline
             .geoadd::<RedisValue, &str, V>(key, options, changed, values)
@@ -992,7 +1078,7 @@ impl RedisConnectionPool {
         changed: bool,
         expiry: i64,
     ) -> Result<(), RedisError> {
-        let pipeline = self.writer_pool.pipeline();
+        let pipeline = self.writer_pool.next().pipeline();
 
         for (key, values) in mval.iter() {
             let _ = pipeline
@@ -1055,9 +1141,9 @@ impl RedisConnectionPool {
         from_lonlat: GeoPosition,
         by_radius: (f64, GeoUnit),
         ord: SortOrder,
-    ) -> Result<Vec<GeoRadiusInfo>, RedisError> {
+    ) -> Result<Vec<(String, Point)>, RedisError> {
         self.reader_pool
-            .geosearch(
+            .geosearch::<Vec<Vec<RedisValue>>, &str>(
                 key,
                 None,
                 Some(from_lonlat.to_owned()),
@@ -1070,7 +1156,32 @@ impl RedisConnectionPool {
                 false,
             )
             .await
-            .map_err(|err| RedisError::GeoSearchFailed(err.to_string()))
+            .map_err(|err| RedisError::GeoSearchFailed(err.to_string()))?
+            .into_iter()
+            .map(|geoval| {
+                if let [RedisValue::String(member), RedisValue::Array(position)] = &geoval[..] {
+                    if let [RedisValue::Double(longitude), RedisValue::Double(latitude)] =
+                        position[..]
+                    {
+                        Ok((
+                            member.to_string(),
+                            Point {
+                                lon: longitude,
+                                lat: latitude,
+                            },
+                        ))
+                    } else {
+                        Err(RedisError::GeoSearchFailed(
+                            "Unexpected RedisValue encountered".to_string(),
+                        ))
+                    }
+                } else {
+                    Err(RedisError::GeoSearchFailed(
+                        "Unexpected RedisValue encountered".to_string(),
+                    ))
+                }
+            })
+            .collect::<Result<_, _>>()
     }
 
     /// Performs a geographical search on multiple Redis keys to find members within a specified area.
@@ -1098,12 +1209,12 @@ impl RedisConnectionPool {
         from_lonlat: GeoPosition,
         by_radius: (f64, GeoUnit),
         ord: SortOrder,
-    ) -> Result<Vec<Option<(String, Point)>>, RedisError> {
-        let pipeline = self.reader_pool.pipeline();
+    ) -> Result<Vec<(String, Point)>, RedisError> {
+        let pipeline = self.reader_pool.next().pipeline();
 
         for key in keys {
             let _ = pipeline
-                .geosearch(
+                .geosearch::<Vec<RedisValue>, String>(
                     key,
                     None,
                     Some(from_lonlat.to_owned()),
@@ -1118,78 +1229,92 @@ impl RedisConnectionPool {
                 .await;
         }
 
-        let geovals: Vec<Option<(String, Point)>> = pipeline
+        let geovals = pipeline
             .all::<Vec<Vec<RedisValue>>>()
             .await
-            .map_err(|err| RedisError::GeoSearchFailed(err.to_string()))?
+            .map_err(|err| RedisError::GeoSearchFailed(err.to_string()))?;
+
+        let geovals = geovals
             .into_iter()
-            .map(|geoval| {
-                if let [RedisValue::String(member), RedisValue::Array(position)] = &geoval[..] {
-                    if let [RedisValue::Double(longitude), RedisValue::Double(latitude)] =
-                        position[..]
-                    {
-                        Some((
-                            member.to_string(),
-                            Point {
-                                lon: longitude,
-                                lat: latitude,
-                            },
-                        ))
+            .flat_map(|geoval| {
+                geoval.into_iter().map(|item| {
+                    if let RedisValue::Array(geoval) = item {
+                        if let [RedisValue::String(member), RedisValue::Array(position)] =
+                            &geoval[..]
+                        {
+                            if let [RedisValue::Double(longitude), RedisValue::Double(latitude)] =
+                                position[..]
+                            {
+                                Ok((
+                                    member.to_string(),
+                                    Point {
+                                        lon: longitude,
+                                        lat: latitude,
+                                    },
+                                ))
+                            } else {
+                                Err(RedisError::GeoSearchFailed(
+                                    "Unexpected RedisValue encountered".to_string(),
+                                ))
+                            }
+                        } else {
+                            Err(RedisError::GeoSearchFailed(
+                                "Unexpected RedisValue encountered".to_string(),
+                            ))
+                        }
                     } else {
-                        error!("Unexpected RedisValue encountered");
-                        None
+                        Err(RedisError::GeoSearchFailed(
+                            "Unexpected RedisValue encountered".to_string(),
+                        ))
                     }
-                } else {
-                    error!("Unexpected RedisValue encountered");
-                    None
-                }
+                })
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         Ok(geovals)
     }
 
-    #[macros::measure_duration]
-    pub async fn geopos(&self, key: &str, members: Vec<String>) -> Result<Vec<Point>, RedisError> {
-        let output = self
-            .reader_pool
-            .geopos(key, members)
-            .await
-            .map_err(|err| RedisError::GeoPosFailed(err.to_string()))?;
+    // #[macros::measure_duration]
+    // pub async fn geopos(&self, key: &str, members: Vec<String>) -> Result<Vec<Point>, RedisError> {
+    //     let output = self
+    //         .reader_pool
+    //         .geopos(key, members)
+    //         .await
+    //         .map_err(|err| RedisError::GeoPosFailed(err.to_string()))?;
 
-        match output {
-            RedisValue::Array(points) => {
-                if !points.is_empty() {
-                    if points[0].is_array() {
-                        let mut resp = Vec::new();
-                        for point in points {
-                            let point = point.as_geo_position().unwrap();
-                            if let Some(pos) = point {
-                                resp.push(Point {
-                                    lat: pos.latitude,
-                                    lon: pos.longitude,
-                                });
-                            }
-                        }
-                        Ok(resp)
-                    } else if points.len() == 2 && points[0].is_double() && points[1].is_double() {
-                        return Ok(vec![Point {
-                            lat: points[1].as_f64().unwrap(),
-                            lon: points[0].as_f64().unwrap(),
-                        }]);
-                    } else {
-                        return Ok(vec![]);
-                    }
-                } else {
-                    Ok(vec![])
-                }
-            }
-            case => Err(RedisError::GeoPosFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
-                case
-            ))),
-        }
-    }
+    //     match output {
+    //         RedisValue::Array(points) => {
+    //             if !points.is_empty() {
+    //                 if points[0].is_array() {
+    //                     let mut resp = Vec::new();
+    //                     for point in points {
+    //                         let point = point.as_geo_position().unwrap();
+    //                         if let Some(pos) = point {
+    //                             resp.push(Point {
+    //                                 lat: pos.latitude,
+    //                                 lon: pos.longitude,
+    //                             });
+    //                         }
+    //                     }
+    //                     Ok(resp)
+    //                 } else if points.len() == 2 && points[0].is_double() && points[1].is_double() {
+    //                     return Ok(vec![Point {
+    //                         lat: points[1].as_f64().unwrap(),
+    //                         lon: points[0].as_f64().unwrap(),
+    //                     }]);
+    //                 } else {
+    //                     return Ok(vec![]);
+    //                 }
+    //             } else {
+    //                 Ok(vec![])
+    //             }
+    //         }
+    //         case => Err(RedisError::GeoPosFailed(format!(
+    //             "Unexpected RedisValue encountered : {:?}",
+    //             case
+    //         ))),
+    //     }
+    // }
 
     /// Asynchronously removes all members in a sorted set within the specified ranks.
     ///

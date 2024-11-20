@@ -6,12 +6,10 @@
     the GNU Affero General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 
-use std::sync::{atomic, Arc};
-
 use error_stack::IntoReport;
 use fred::{
     interfaces::ClientLike,
-    types::{ReconnectPolicy, RedisConfig},
+    types::{ConnectHandle, ReconnectPolicy, RedisConfig},
 };
 use serde::Deserialize;
 use tracing::error;
@@ -114,7 +112,8 @@ impl std::ops::Deref for RedisClient {
 impl RedisClient {
     pub async fn new(conf: RedisSettings) -> Result<Self, RedisError> {
         let (redis_config, reconnect_policy) = Self::get_config(&conf).await?;
-        let client = fred::prelude::RedisClient::new(redis_config, None, Some(reconnect_policy));
+        let client =
+            fred::prelude::RedisClient::new(redis_config, None, None, Some(reconnect_policy));
         client.connect();
         client
             .wait_for_connect()
@@ -169,10 +168,9 @@ impl RedisClient {
 }
 
 pub struct RedisConnectionPool {
-    pub reader_pool: fred::pool::RedisPool,
-    pub writer_pool: fred::pool::RedisPool,
-    join_handles: Vec<fred::types::ConnectHandle>,
-    is_redis_available: Arc<atomic::AtomicBool>,
+    pub reader_pool: fred::prelude::RedisPool,
+    pub writer_pool: fred::prelude::RedisPool,
+    join_handles: Vec<ConnectHandle>,
 }
 
 impl RedisConnectionPool {
@@ -197,12 +195,11 @@ impl RedisConnectionPool {
             reader_pool,
             writer_pool,
             join_handles,
-            is_redis_available: Arc::new(atomic::AtomicBool::new(true)),
         })
     }
     async fn instantiate(
         conf: &RedisSettings,
-    ) -> Result<(fred::pool::RedisPool, Vec<fred::types::ConnectHandle>), RedisError> {
+    ) -> Result<(fred::prelude::RedisPool, Vec<fred::types::ConnectHandle>), RedisError> {
         let redis_connection_url = match conf.cluster_enabled {
             // Fred relies on this format for specifying cluster where the host port is ignored & only query parameters are used for node addresses
             // redis-cluster://username:password@host:port?node=bar.com:30002&node=baz.com:30003
@@ -235,11 +232,17 @@ impl RedisConnectionPool {
             conf.reconnect_delay,
         );
 
-        let pool = fred::pool::RedisPool::new(config, None, Some(reconnect_policy), conf.pool_size)
-            .into_report()
-            .map_err(|err| RedisError::RedisConnectionError(err.to_string()))?;
+        let pool = fred::prelude::RedisPool::new(
+            config,
+            None,
+            None,
+            Some(reconnect_policy),
+            conf.pool_size,
+        )
+        .into_report()
+        .map_err(|err| RedisError::RedisConnectionError(err.to_string()))?;
 
-        let join_handles = pool.connect();
+        let join_handles = pool.connect_pool();
         pool.wait_for_connect()
             .await
             .into_report()
@@ -249,31 +252,14 @@ impl RedisConnectionPool {
     }
 
     pub async fn close_connections(&mut self) {
-        self.writer_pool.quit_pool().await;
-        self.reader_pool.quit_pool().await;
+        let _ = self.writer_pool.quit().await;
+        let _ = self.reader_pool.quit().await;
         for handle in self.join_handles.drain(..) {
             match handle.await {
                 Ok(Ok(_)) => (),
                 Ok(Err(error)) => error!(%error),
                 Err(error) => error!(%error),
             };
-        }
-    }
-    pub async fn on_error(&self) {
-        while let Ok(redis_error) = self.reader_pool.on_error().recv().await {
-            error!(?redis_error, "Redis protocol or connection error");
-            if self.reader_pool.state() == fred::types::ClientState::Disconnected {
-                self.is_redis_available
-                    .store(false, atomic::Ordering::SeqCst);
-            }
-        }
-
-        while let Ok(redis_error) = self.writer_pool.on_error().recv().await {
-            error!(?redis_error, "Redis protocol or connection error");
-            if self.writer_pool.state() == fred::types::ClientState::Disconnected {
-                self.is_redis_available
-                    .store(false, atomic::Ordering::SeqCst);
-            }
         }
     }
 }
