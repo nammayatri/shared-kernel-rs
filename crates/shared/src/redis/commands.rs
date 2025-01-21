@@ -13,8 +13,7 @@ use crate::redis::types::*;
 use crate::tools::prometheus::MEASURE_DURATION;
 use fred::{
     prelude::{
-        ClusterInterface, GeoInterface, HashesInterface, KeysInterface, ListInterface,
-        SortedSetsInterface, StreamsInterface,
+        ClusterInterface, GeoInterface, HashesInterface, KeysInterface, ListInterface, SortedSetsInterface, StreamsInterface
     },
     types::{
         XID::{self, Auto, Manual},
@@ -1602,7 +1601,13 @@ impl RedisConnectionPool {
             .xdel(key, id)
             .await
             .map_err(|err| RedisError::XDeleteFailed(err.to_string()))
-    }
+    }  
+
+    #[macros::measure_duration]
+    pub async fn hdel(&self, key: &str,id: &str) -> Result<(),RedisError> {
+        self.writer_pool.hdel(key, id).await.map_err(|err| RedisError::DeleteHashFieldFailed(err.to_string()))
+    }  
+
 }
 
 impl RedisClient {
