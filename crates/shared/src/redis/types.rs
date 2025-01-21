@@ -8,13 +8,16 @@
 
 use error_stack::IntoReport;
 use fred::{
-    interfaces::ClientLike,
-    types::{ConnectHandle, ReconnectPolicy, RedisConfig},
+    interfaces::{ClientLike,PubsubInterface,}, prelude::EventInterface, types::{ConnectHandle, Message, ReconnectPolicy, RedisConfig, RedisValue}
 };
-use serde::Deserialize;
+use log::info;
+// use futures::{channel::mpsc::{self, UnboundedReceiver, UnboundedSender}, SinkExt};
+use serde::{de::DeserializeOwned, Deserialize};
 use tracing::error;
-
+use tokio::sync::{broadcast::Receiver, mpsc::{UnboundedReceiver, UnboundedSender}};
+use tokio::sync::mpsc;
 use super::error::RedisError;
+use tracing::*;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Point {
@@ -262,4 +265,99 @@ impl RedisConnectionPool {
             };
         }
     }
+
+    pub async fn subscribe_channel<T>(
+        &self,
+        channel: &str,
+
+    ) -> Result<mpsc::UnboundedReceiver<(String, T)>, RedisError>
+    where
+        T: DeserializeOwned + Send + 'static,
+    {
+        let (tx,mut rx) : (UnboundedSender<(String,T)> ,UnboundedReceiver<(String,T)>) = mpsc::unbounded_channel();
+        
+        let redis_connection = self.reader_pool.next();
+        redis_connection.subscribe(channel).await.map_err(|e| {
+            RedisError::GetFailed(format!("Failed to subscribe to channel '{}': {}", channel, e))
+        })?;
+        let mut message_stream: Receiver<Message> = redis_connection.message_rx();
+        tokio::spawn(async move {
+            loop {
+                let res  = message_stream.recv().await;
+                match res {
+                    Err(err) => error!("Error in receiving message from Redis, err : {}", err.to_string()),
+                    Ok(msg) => {
+                        let channel_name = msg.channel.to_string();
+                        match &msg.value {
+                            RedisValue::String(val) => {
+                                match serde_json::from_str::<T>(val) {
+                                    Ok(parsed) => {
+                                        if let Err(err) = tx.send((channel_name, parsed)) {
+                                            error!("Failed to send message to receiver: {}", err);
+                                        }
+                                    }
+                                    Err(err) => {
+                                        error!("Deserialization error for channel '{}': {}",channel_name, err);
+                                    }
+                                }
+                            }
+                            RedisValue::Null => {
+                                error!("Received null value on channel '{}'", channel_name);
+                            }
+                            other => {
+                                error!(
+                                    "Unexpected RedisValue encountered on channel '{}': {:?}",
+                                    channel_name, other
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        Ok(rx)
+    }  
+
+    pub async fn subscribe_channel_as_str(
+        &self,
+        channel: &str,
+
+    ) -> Result<mpsc::UnboundedReceiver<(String, String)>, RedisError>
+    {
+        let (tx,mut rx) : (UnboundedSender<(String,String)> ,UnboundedReceiver<(String,String)>) = mpsc::unbounded_channel();
+        
+        let redis_connection = self.reader_pool.next();
+        redis_connection.subscribe(channel).await.map_err(|e| {
+            RedisError::GetFailed(format!("Failed to subscribe to channel '{}': {}", channel, e))
+        })?;
+        let mut message_stream: Receiver<Message> = redis_connection.message_rx();
+        tokio::spawn(async move {
+            loop {
+                let res  = message_stream.recv().await;
+                match res {
+                    Err(err) => error!("Error in receiving message from Redis, err : {}", err.to_string()),
+                    Ok(msg) => {
+                        let channel_name = msg.channel.to_string();
+                        match &msg.value {
+                            RedisValue::String(val) => {
+                                if let Err(err) = tx.send((channel_name, val.to_string())) {
+                                    error!("Failed to send message to receiver: {}", err);
+                                }
+                            }
+                            RedisValue::Null => {
+                                error!("Received null value on channel '{}'", channel_name);
+                            }
+                            other => {
+                                error!(
+                                    "Unexpected RedisValue encountered on channel '{}': {:?}",
+                                    channel_name, other
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        Ok(rx)
+    }  
 }
