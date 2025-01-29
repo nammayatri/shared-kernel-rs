@@ -1532,6 +1532,10 @@ impl RedisConnectionPool {
         ids: Vec<String>,
         count: Option<u64>,
     ) -> Result<FxHashMap<String, Vec<Vec<(String, String)>>>, RedisError> {
+        let mut result = FxHashMap::default();
+        if ids.is_empty() {
+            return Ok(result);
+        }
         let output: RedisValue = self
             .reader_pool
             .xread(
@@ -1542,7 +1546,6 @@ impl RedisConnectionPool {
             )
             .await
             .map_err(|err| RedisError::XReadFailed(err.to_string()))?;
-        let mut result = FxHashMap::default();
 
         match output {
             RedisValue::Map(output) => {
