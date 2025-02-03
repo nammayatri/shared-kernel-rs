@@ -531,14 +531,25 @@ impl RedisConnectionPool {
     /// }
     /// ```
     #[macros::measure_duration]
-    pub async fn get_hash_field<V>(&self, key: &str, field: &str) -> Result<V, RedisError>
+    pub async fn get_hash_field<T>(&self, key: &str, field: &str) -> Result<T, RedisError>
     where
-        V: FromRedis + Unpin + Send + 'static,
+        T: DeserializeOwned,
     {
-        self.reader_pool
+        let value: RedisValue = self.reader_pool
             .hget(key, field)
             .await
-            .map_err(|err| RedisError::GetHashFieldFailed(err.to_string()))
+            .map_err(|err| RedisError::GetHashFieldFailed(err.to_string()))?;
+
+        match value {
+            RedisValue::String(value) => {
+                serde_json::from_str::<T>(&value.to_string())
+                    .map_err(|err| RedisError::DeserializationError(err.to_string()))
+            }
+            _ => Err(RedisError::GetHashFieldFailed(format!(
+                "Unexpected RedisValue encountered: {:?}",
+                value
+            ))),
+        }
     }
 
     #[macros::measure_duration]
