@@ -6,17 +6,23 @@
     the GNU Affero General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 
+use chrono::{DateTime, Utc};
 use error_stack::IntoReport;
 use fred::{
-    interfaces::{ClientLike,PubsubInterface,}, prelude::EventInterface, types::{ConnectHandle, Message, ReconnectPolicy, RedisConfig, RedisValue}
+    interfaces::{ClientLike, PubsubInterface},
+    prelude::EventInterface,
+    types::{ConnectHandle, Message, ReconnectPolicy, RedisConfig, RedisValue},
 };
 use log::info;
 // use futures::{channel::mpsc::{self, UnboundedReceiver, UnboundedSender}, SinkExt};
-use serde::{de::DeserializeOwned, Deserialize};
-use tracing::error;
-use tokio::sync::{broadcast::Receiver, mpsc::{UnboundedReceiver, UnboundedSender}};
-use tokio::sync::mpsc;
 use super::error::RedisError;
+use serde::{de::DeserializeOwned, Deserialize};
+use tokio::sync::mpsc;
+use tokio::sync::{
+    broadcast::Receiver,
+    mpsc::{UnboundedReceiver, UnboundedSender},
+};
+use tracing::error;
 use tracing::*;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -269,38 +275,47 @@ impl RedisConnectionPool {
     pub async fn subscribe_channel<T>(
         &self,
         channel: &str,
-
-    ) -> Result<mpsc::UnboundedReceiver<(String, T)>, RedisError>
+    ) -> Result<mpsc::UnboundedReceiver<(String, T, DateTime<Utc>)>, RedisError>
     where
         T: DeserializeOwned + Send + 'static,
     {
-        let (tx,mut rx) : (UnboundedSender<(String,T)> ,UnboundedReceiver<(String,T)>) = mpsc::unbounded_channel();
-        
+        let (tx, mut rx): (
+            UnboundedSender<(String, T, DateTime<Utc>)>,
+            UnboundedReceiver<(String, T, DateTime<Utc>)>,
+        ) = mpsc::unbounded_channel();
+
         let redis_connection = self.reader_pool.next();
         redis_connection.subscribe(channel).await.map_err(|e| {
-            RedisError::GetFailed(format!("Failed to subscribe to channel '{}': {}", channel, e))
+            RedisError::GetFailed(format!(
+                "Failed to subscribe to channel '{}': {}",
+                channel, e
+            ))
         })?;
         let mut message_stream: Receiver<Message> = redis_connection.message_rx();
         tokio::spawn(async move {
             loop {
-                let res  = message_stream.recv().await;
+                let res = message_stream.recv().await;
                 match res {
-                    Err(err) => error!("Error in receiving message from Redis, err : {}", err.to_string()),
+                    Err(err) => error!(
+                        "Error in receiving message from Redis, err : {}",
+                        err.to_string()
+                    ),
                     Ok(msg) => {
                         let channel_name = msg.channel.to_string();
                         match &msg.value {
-                            RedisValue::String(val) => {
-                                match serde_json::from_str::<T>(val) {
-                                    Ok(parsed) => {
-                                        if let Err(err) = tx.send((channel_name, parsed)) {
-                                            error!("Failed to send message to receiver: {}", err);
-                                        }
-                                    }
-                                    Err(err) => {
-                                        error!("Deserialization error for channel '{}': {}",channel_name, err);
+                            RedisValue::String(val) => match serde_json::from_str::<T>(val) {
+                                Ok(parsed) => {
+                                    if let Err(err) = tx.send((channel_name, parsed, Utc::now())) {
+                                        error!("Failed to send message to receiver: {}", err);
                                     }
                                 }
-                            }
+                                Err(err) => {
+                                    error!(
+                                        "Deserialization error for channel '{}': {}",
+                                        channel_name, err
+                                    );
+                                }
+                            },
                             RedisValue::Null => {
                                 error!("Received null value on channel '{}'", channel_name);
                             }
@@ -316,26 +331,33 @@ impl RedisConnectionPool {
             }
         });
         Ok(rx)
-    }  
+    }
 
     pub async fn subscribe_channel_as_str(
         &self,
         channel: &str,
+    ) -> Result<mpsc::UnboundedReceiver<(String, String)>, RedisError> {
+        let (tx, mut rx): (
+            UnboundedSender<(String, String)>,
+            UnboundedReceiver<(String, String)>,
+        ) = mpsc::unbounded_channel();
 
-    ) -> Result<mpsc::UnboundedReceiver<(String, String)>, RedisError>
-    {
-        let (tx,mut rx) : (UnboundedSender<(String,String)> ,UnboundedReceiver<(String,String)>) = mpsc::unbounded_channel();
-        
         let redis_connection = self.reader_pool.next();
         redis_connection.subscribe(channel).await.map_err(|e| {
-            RedisError::GetFailed(format!("Failed to subscribe to channel '{}': {}", channel, e))
+            RedisError::GetFailed(format!(
+                "Failed to subscribe to channel '{}': {}",
+                channel, e
+            ))
         })?;
         let mut message_stream: Receiver<Message> = redis_connection.message_rx();
         tokio::spawn(async move {
             loop {
-                let res  = message_stream.recv().await;
+                let res = message_stream.recv().await;
                 match res {
-                    Err(err) => error!("Error in receiving message from Redis, err : {}", err.to_string()),
+                    Err(err) => error!(
+                        "Error in receiving message from Redis, err : {}",
+                        err.to_string()
+                    ),
                     Ok(msg) => {
                         let channel_name = msg.channel.to_string();
                         match &msg.value {
@@ -359,5 +381,5 @@ impl RedisConnectionPool {
             }
         });
         Ok(rx)
-    }  
+    }
 }
