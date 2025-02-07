@@ -56,6 +56,7 @@ pub struct RedisSettings {
     pub default_hash_ttl: u32,
     pub stream_read_count: u64,
     pub partition: usize,
+    pub broadcast_channel_capacity: usize,
 }
 
 impl Default for RedisSettings {
@@ -73,6 +74,7 @@ impl Default for RedisSettings {
             default_hash_ttl: 3600,
             stream_read_count: 100,
             partition: 0,
+            broadcast_channel_capacity: 32,
         }
     }
 }
@@ -89,6 +91,7 @@ impl RedisSettings {
         default_ttl: u32,
         default_hash_ttl: u32,
         stream_read_count: u64,
+        broadcast_channel_capacity: usize,
     ) -> Self {
         RedisSettings {
             host,
@@ -103,6 +106,7 @@ impl RedisSettings {
             default_ttl,
             default_hash_ttl,
             stream_read_count,
+            broadcast_channel_capacity,
         }
     }
 }
@@ -241,9 +245,12 @@ impl RedisConnectionPool {
             conf.reconnect_delay,
         );
 
+        let mut performance_config = fred::types::PerformanceConfig::default();
+        performance_config.broadcast_channel_capacity = conf.broadcast_channel_capacity;
+
         let pool = fred::prelude::RedisPool::new(
             config,
-            None,
+            Some(performance_config),
             None,
             Some(reconnect_policy),
             conf.pool_size,
