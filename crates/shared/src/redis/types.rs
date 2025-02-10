@@ -9,11 +9,8 @@
 use chrono::{DateTime, Utc};
 use error_stack::IntoReport;
 use fred::{
-    interfaces::{ClientLike, PubsubInterface},
-    prelude::EventInterface,
-    types::{ConnectHandle, Message, ReconnectPolicy, RedisConfig, RedisValue},
+    interfaces::{ClientLike,PubsubInterface,}, prelude::EventInterface, types::{Builder, ConnectHandle, Message, ReconnectPolicy, RedisConfig, RedisValue}
 };
-use log::info;
 // use futures::{channel::mpsc::{self, UnboundedReceiver, UnboundedSender}, SinkExt};
 use super::error::RedisError;
 use serde::{de::DeserializeOwned, Deserialize};
@@ -23,7 +20,6 @@ use tokio::sync::{
     mpsc::{UnboundedReceiver, UnboundedSender},
 };
 use tracing::error;
-use tracing::*;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Point {
@@ -389,4 +385,55 @@ impl RedisConnectionPool {
         });
         Ok(rx)
     }
+
+    pub async fn subscribe_channel_new<T>(
+        &self,
+        channel: &str,
+    ) -> Result<mpsc::UnboundedReceiver<(String, T, DateTime<Utc>)>, RedisError>
+    where
+        T: DeserializeOwned + Send + 'static,
+    {
+        let (tx, mut rx): (
+            UnboundedSender<(String, T, DateTime<Utc>)>,
+            UnboundedReceiver<(String, T, DateTime<Utc>)>,
+        ) = mpsc::unbounded_channel();
+    
+        let conn = self.reader_pool.next();
+        conn.subscribe(channel).await.map_err(|e| {
+            RedisError::GetFailed(format!(
+                "Failed to subscribe to channel '{}': {}",
+                channel, e
+            ))
+        })?;
+    
+        let _message_task = conn.on_message(move |msg| {
+            let channel_name = msg.channel.to_string();
+            match &msg.value {
+                RedisValue::String(val) => {
+                    match serde_json::from_str::<T>(val) {
+                        Ok(parsed) => {
+                            if let Err(err) = tx.send((channel_name, parsed, Utc::now())) {
+                                error!("Failed to send message to receiver: {}", err);
+                            }
+                        }
+                        Err(err) => {
+                            error!("Deserialization error for channel '{}': {}", channel_name, err);
+                        }
+                    }
+                }
+                RedisValue::Null => {
+                    error!("Received null value on channel '{}'", channel_name);
+                }
+                other => {
+                    error!(
+                        "Unexpected RedisValue encountered on channel '{}': {:?}",
+                        channel_name, other
+                    );
+                }
+            }
+            Ok::<_,fred::error::RedisError>(())
+        });
+        Ok(rx)
+    }
+        
 }
