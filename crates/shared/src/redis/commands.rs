@@ -13,7 +13,8 @@ use crate::redis::types::*;
 use crate::tools::prometheus::MEASURE_DURATION;
 use fred::{
     prelude::{
-        ClusterInterface, GeoInterface, HashesInterface, KeysInterface, ListInterface, SortedSetsInterface, StreamsInterface
+        ClusterInterface, GeoInterface, HashesInterface, KeysInterface, ListInterface,
+        SortedSetsInterface, StreamsInterface,
     },
     types::{
         XID::{self, Auto, Manual},
@@ -535,16 +536,15 @@ impl RedisConnectionPool {
     where
         T: DeserializeOwned,
     {
-        let value: RedisValue = self.reader_pool
+        let value: RedisValue = self
+            .reader_pool
             .hget(key, field)
             .await
             .map_err(|err| RedisError::GetHashFieldFailed(err.to_string()))?;
 
         match value {
-            RedisValue::String(value) => {
-                serde_json::from_str::<T>(&value.to_string())
-                    .map_err(|err| RedisError::DeserializationError(err.to_string()))
-            }
+            RedisValue::String(value) => serde_json::from_str::<T>(&value.to_string())
+                .map_err(|err| RedisError::DeserializationError(err.to_string())),
             _ => Err(RedisError::GetHashFieldFailed(format!(
                 "Unexpected RedisValue encountered: {:?}",
                 value
@@ -561,7 +561,7 @@ impl RedisConnectionPool {
             .reader_pool
             .hgetall(key)
             .await
-            .map_err(|err| RedisError::GetHashFieldFailed(err.to_string()))?;
+            .map_err(|err| RedisError::GetAllHashFieldFailed(err.to_string()))?;
 
         match output {
             RedisValue::Map(redis_map) => {
@@ -1615,13 +1615,15 @@ impl RedisConnectionPool {
             .xdel(key, id)
             .await
             .map_err(|err| RedisError::XDeleteFailed(err.to_string()))
-    }  
+    }
 
     #[macros::measure_duration]
-    pub async fn hdel(&self, key: &str,id: &str) -> Result<(),RedisError> {
-        self.writer_pool.hdel(key, id).await.map_err(|err| RedisError::DeleteHashFieldFailed(err.to_string()))
-    }  
-
+    pub async fn hdel(&self, key: &str, id: &str) -> Result<(), RedisError> {
+        self.writer_pool
+            .hdel(key, id)
+            .await
+            .map_err(|err| RedisError::DeleteHashFieldFailed(err.to_string()))
+    }
 }
 
 impl RedisClient {
