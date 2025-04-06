@@ -211,10 +211,10 @@ where
                         .map_err(|err| CallAPIError::DeserializationError(err.to_string()))?)
                 }
             } else {
-                error!(tag = "[OUTGOING API - ERROR]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = format!("{:?}", header_map), error = format!("{:?}", resp), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
-                Err(CallAPIError::ExternalAPICallError(
-                    resp.status().to_string(),
-                ))
+                let resp_status = resp.status().to_string();
+                let resp_body = resp.text().await;
+                error!(tag = "[OUTGOING API - ERROR]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = format!("{:?}", header_map), response_status = format!("{:?}", resp_status), response_body = format!("{:?}", resp_body), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
+                Err(CallAPIError::ExternalAPICallError(resp_status))
             }
         }
         Err(err) => {
