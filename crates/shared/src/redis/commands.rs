@@ -532,7 +532,7 @@ impl RedisConnectionPool {
     /// }
     /// ```
     #[macros::measure_duration]
-    pub async fn get_hash_field<T>(&self, key: &str, field: &str) -> Result<T, RedisError>
+    pub async fn get_hash_field<T>(&self, key: &str, field: &str) -> Result<Option<T>, RedisError>
     where
         T: DeserializeOwned,
     {
@@ -543,8 +543,11 @@ impl RedisConnectionPool {
             .map_err(|err| RedisError::GetHashFieldFailed(err.to_string()))?;
 
         match value {
-            RedisValue::String(value) => serde_json::from_str::<T>(&value.to_string())
-                .map_err(|err| RedisError::DeserializationError(err.to_string())),
+            RedisValue::String(value) => Ok(Some(
+                serde_json::from_str::<T>(&value.to_string())
+                    .map_err(|err| RedisError::DeserializationError(err.to_string()))?,
+            )),
+            RedisValue::Null => Ok(None),
             _ => Err(RedisError::GetHashFieldFailed(format!(
                 "Unexpected RedisValue encountered: {:?}",
                 value
