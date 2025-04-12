@@ -72,6 +72,22 @@ impl RedisConnectionPool {
     }
 
     #[macros::measure_duration]
+    pub async fn set_key_without_expiry<V>(&self, key: &str, value: V) -> Result<(), RedisError>
+    where
+        V: Serialize + Send + Sync,
+    {
+        let serialized_value = serde_json::to_string(&value)
+            .map_err(|err| RedisError::SerializationError(err.to_string()))?;
+
+        let redis_value: RedisValue = serialized_value.into();
+
+        self.writer_pool
+            .set(key, redis_value, None, None, false)
+            .await
+            .map_err(|err| RedisError::SetFailed(err.to_string()))
+    }
+
+    #[macros::measure_duration]
     pub async fn set_key_as_str(
         &self,
         key: &str,
