@@ -1,6 +1,10 @@
 use aws_sdk_s3::client::Client;
 use error_stack::Result;
-use std::collections::HashMap;
+use futures::future::join_all;
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -148,14 +152,30 @@ pub async fn get_files_in_directory_from_s3(
     let objects = s3_client.list_objects_s3(s3_bucket, s3_prefix).await?;
 
     // Download each object
-    let mut files = HashMap::new();
+    let mut all_tasks = Vec::new();
+
     for key in objects {
         // Skip if the key is the prefix itself (directory marker)
         if key == s3_prefix {
             continue;
         }
 
-        let data = get_file_from_s3(s3_bucket, &key).await?;
+        let task = async move {
+            let data = get_file_from_s3(s3_bucket, &key).await?;
+            Ok((key, data))
+        };
+
+        all_tasks.push(Box::pin(task));
+    }
+
+    let results = join_all(all_tasks)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<(String, Vec<u8>)>, AWSError>>()?;
+
+    let mut files = HashMap::new();
+
+    for (key, data) in results {
         files.insert(key, data);
     }
 
