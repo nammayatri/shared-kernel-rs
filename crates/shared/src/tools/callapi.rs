@@ -129,6 +129,7 @@ pub async fn call_api<T, U>(
     url: &Url,
     headers: Vec<(&str, &str)>,
     body: Option<U>,
+    service: Option<&str>,
 ) -> Result<T, CallAPIError>
 where
     T: DeserializeOwned + 'static,
@@ -191,7 +192,7 @@ where
     call_external_api!(
         method.as_str(),
         url_str.as_str(),
-        url.path(),
+        service.unwrap_or(url.path()),
         status.as_str(),
         start_time
     );
@@ -272,6 +273,7 @@ pub async fn call_api_unwrapping_error<T, U, E>(
     url: &Url,
     headers: Vec<(&str, &str)>,
     body: Option<U>,
+    service: Option<&str>,
     error_handler: Box<dyn Fn(Response) -> E>,
 ) -> Result<T, E>
 where
@@ -334,7 +336,7 @@ where
     call_external_api!(
         method.as_str(),
         url_str.as_str(),
-        url.path(),
+        service.unwrap_or(url.path()),
         status.as_str(),
         start_time
     );
