@@ -28,6 +28,14 @@ pub static CALL_EXTERNAL_API: once_cell::sync::Lazy<HistogramVec> =
         .expect("Failed to register call external API metrics")
     });
 
+pub static TERMINATION: once_cell::sync::Lazy<HistogramVec> = once_cell::sync::Lazy::new(|| {
+    register_histogram_vec!(
+        opts!("termination", "Terminations").into(),
+        &["type", "version"]
+    )
+    .expect("Failed to register termination metrics")
+});
+
 #[macro_export]
 macro_rules! measure_latency_duration {
     ($function:expr, $start:expr) => {
@@ -44,6 +52,17 @@ macro_rules! call_external_api {
         let duration = $start.elapsed().as_secs_f64();
         CALL_EXTERNAL_API
             .with_label_values(&[$method, $host, $path, $status])
+            .observe(duration);
+    };
+}
+
+#[macro_export]
+macro_rules! termination {
+    ($type_:expr, $start:expr) => {
+        let duration = $start.elapsed().as_secs_f64();
+        let version = std::env::var("DEPLOYMENT_VERSION").unwrap_or("DEV".to_string());
+        TERMINATION
+            .with_label_values(&[$type_, version.as_str()])
             .observe(duration);
     };
 }
@@ -88,6 +107,11 @@ pub fn init_prometheus_metrics() -> PrometheusMetrics {
         .registry
         .register(Box::new(CALL_EXTERNAL_API.to_owned()))
         .expect("Failed to register call external API metrics");
+
+    prometheus
+        .registry
+        .register(Box::new(TERMINATION.to_owned()))
+        .expect("Failed to register termination metrics");
 
     prometheus
 }
