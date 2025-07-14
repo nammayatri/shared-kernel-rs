@@ -12,7 +12,7 @@ chrono = { version = "0.4.23", features = ["serde"] }
 tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "registry", "json"] }
 async-trait = "0.1.66"
-error-stack = "0.3.1"
+error-stack = "0.2.0"
 futures = "0.3"
 prometheus = { version = "0.13.3", features = ["process"] }
 serde = { version = "1.0.155", features = ["derive"] }
