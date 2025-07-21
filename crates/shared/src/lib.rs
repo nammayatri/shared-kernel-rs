@@ -10,5 +10,6 @@
 #![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
 
+pub mod middleware;
 pub mod redis;
 pub mod tools;

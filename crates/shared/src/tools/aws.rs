@@ -1,10 +1,7 @@
 use aws_sdk_s3::client::Client;
 use error_stack::Result;
 use futures::future::join_all;
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::collections::HashMap;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
