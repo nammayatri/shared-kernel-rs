@@ -520,6 +520,30 @@ impl RedisConnectionPool {
             .map_err(|err| RedisError::SetHashFieldFailed(err.to_string()))
     }
 
+    #[macros::measure_duration]
+    pub async fn set_hash_fields<V>(
+        &self,
+        key: &str,
+        values: Vec<(String, V)>,
+    ) -> Result<(), RedisError>
+    where
+        V: Serialize + Debug + Send + Sync + Clone,
+    {
+        let serialized_value: Vec<(String, RedisValue)> = values
+            .into_iter()
+            .map(|(field, value)| {
+                serde_json::to_string(&value)
+                    .map(|value| (field, value.into()))
+                    .map_err(|err| RedisError::SerializationError(err.to_string()))
+            })
+            .collect::<Result<_, _>>()?;
+
+        self.writer_pool
+            .hset::<(), &str, Vec<(String, RedisValue)>>(key, serialized_value)
+            .await
+            .map_err(|err| RedisError::SetHashFieldFailed(err.to_string()))
+    }
+
     /// Retrieves a field value from a hash in the Redis store.
     ///
     /// This asynchronous function receives a key representing a hash and a field within that hash,
@@ -1005,18 +1029,15 @@ impl RedisConnectionPool {
     /// This function will return an `Err` variant of `RedisError` with `GeoAddFailed` containing
     /// an error message if the Redis operation fails.
     #[macros::measure_duration]
-    pub async fn geo_add<V>(
+    pub async fn geo_add(
         &self,
         key: &str,
-        values: V,
+        values: Vec<GeoValue>,
         options: Option<SetOptions>,
         changed: bool,
-    ) -> Result<(), RedisError>
-    where
-        V: Into<MultipleGeoValues> + Send + Debug,
-    {
+    ) -> Result<(), RedisError> {
         self.writer_pool
-            .geoadd(key, options, changed, values)
+            .geoadd(key, options, changed, MultipleGeoValues::from(values))
             .await
             .map_err(|err| RedisError::GeoAddFailed(err.to_string()))
     }
@@ -1045,18 +1066,20 @@ impl RedisConnectionPool {
     pub async fn geo_add_with_expiry<V>(
         &self,
         key: &str,
-        values: V,
+        values: Vec<GeoValue>,
         options: Option<SetOptions>,
         changed: bool,
         expiry: u64,
-    ) -> Result<(), RedisError>
-    where
-        V: Into<MultipleGeoValues> + Send + Debug,
-    {
+    ) -> Result<(), RedisError> {
         let pipeline = self.writer_pool.next().pipeline();
 
         let _ = pipeline
-            .geoadd::<RedisValue, &str, V>(key, options, changed, values)
+            .geoadd::<RedisValue, &str, MultipleGeoValues>(
+                key,
+                options,
+                changed,
+                MultipleGeoValues::from(values),
+            )
             .await;
         let _ = pipeline.expire::<(), &str>(key, expiry as i64).await;
 
@@ -1637,11 +1660,19 @@ impl RedisConnectionPool {
     }
 
     #[macros::measure_duration]
-    pub async fn hdel(&self, key: &str, id: &str) -> Result<(), RedisError> {
+    pub async fn hdel(&self, key: &str, field: &str) -> Result<(), RedisError> {
         self.writer_pool
-            .hdel(key, id)
+            .hdel(key, field)
             .await
             .map_err(|err| RedisError::DeleteHashFieldFailed(err.to_string()))
+    }
+
+    #[macros::measure_duration]
+    pub async fn hmdel(&self, key: &str, fields: Vec<&str>) -> Result<(), RedisError> {
+        self.writer_pool
+            .hdel(key, fields)
+            .await
+            .map_err(|err| RedisError::DeleteHashFieldsFailed(err.to_string()))
     }
 }
 
