@@ -456,6 +456,71 @@ impl RedisConnectionPool {
             .map_err(|err| RedisError::GetHashFieldFailed(err.to_string()))
     }
 
+    /// Deletes a field from a hash in the Redis store.
+    ///
+    /// This asynchronous function receives a key representing a hash and a field within that hash,
+    /// and attempts to delete the field from the hash.
+    /// It returns a `Result` containing the number of fields that were removed on success,
+    /// or an `RedisError::DelHashFieldFailed` containing a description of the error if any failure occurs.
+    ///
+    /// # Parameters
+    /// - `key: &str` - The key representing the hash in the Redis store.
+    /// - `field: &str` - The field within the hash that should be deleted.
+    ///
+    /// # Returns
+    /// - `Result<i64, RedisError>` - A `Result` containing the number of fields removed (`Ok`) on success,
+    ///   or an `RedisError::DelHashFieldFailed` on failure.
+    ///
+    /// # Examples
+    /// ```
+    /// let result = your_redis_instance.del_hash_field("your_hash", "your_field").await;
+    /// match result {
+    ///     Ok(removed_count) => println!("Removed {} field(s)", removed_count),
+    ///     Err(e) => println!("An error occurred: {:?}", e),
+    /// }
+    /// ```
+    pub async fn del_hash_field(&self, key: &str, field: &str) -> Result<i64, RedisError> {
+        self.pool
+            .hdel(key, field)
+            .await
+            .map_err(|err| RedisError::DelHashFieldFailed(err.to_string()))
+    }
+
+    /// Deletes multiple fields from a hash in the Redis store.
+    ///
+    /// This asynchronous function receives a key representing a hash and a vector of fields within that hash,
+    /// and attempts to delete all the specified fields from the hash.
+    /// It returns a `Result` containing the number of fields that were removed on success,
+    /// or an `RedisError::DelHashFieldFailed` containing a description of the error if any failure occurs.
+    ///
+    /// # Parameters
+    /// - `key: &str` - The key representing the hash in the Redis store.
+    /// - `fields: Vec<&str>` - A vector of fields within the hash that should be deleted.
+    ///
+    /// # Returns
+    /// - `Result<i64, RedisError>` - A `Result` containing the number of fields removed (`Ok`) on success,
+    ///   or an `RedisError::DelHashFieldFailed` on failure.
+    ///
+    /// # Examples
+    /// ```
+    /// let fields_to_delete = vec!["field1", "field2", "field3"];
+    /// let result = your_redis_instance.del_hash_fields("your_hash", fields_to_delete).await;
+    /// match result {
+    ///     Ok(removed_count) => println!("Removed {} field(s)", removed_count),
+    ///     Err(e) => println!("An error occurred: {:?}", e),
+    /// }
+    /// ```
+    pub async fn del_hash_fields(&self, key: &str, fields: Vec<&str>) -> Result<i64, RedisError> {
+        if fields.is_empty() {
+            return Ok(0);
+        }
+
+        self.pool
+            .hdel(key, fields)
+            .await
+            .map_err(|err| RedisError::DelHashFieldFailed(err.to_string()))
+    }
+
     /// Appends one or multiple values to the end of a list in the Redis store.
     ///
     /// This asynchronous function receives a key representing a list and a vector of values to be appended to the list.
