@@ -16,8 +16,8 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method, Response, Url};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
-use std::{convert, fmt::Debug};
+use std::{convert, fmt::Debug, pin::Pin};
+use std::{future::Future, str::FromStr};
 use tracing::{error, info};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -274,7 +274,7 @@ pub async fn call_api_unwrapping_error<T, U, E>(
     headers: Vec<(&str, &str)>,
     body: Option<U>,
     service: Option<&str>,
-    error_handler: Box<dyn Fn(Response) -> E>,
+    error_handler: Box<dyn Fn(Response) -> Pin<Box<dyn Future<Output = E> + Send>> + Send + Sync>,
 ) -> Result<T, E>
 where
     T: DeserializeOwned + 'static,
@@ -357,7 +357,7 @@ where
                 }
             } else {
                 error!(tag = "[OUTGOING API - ERROR]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = format!("{:?}", header_map), error = format!("{:?}", resp), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
-                Err(error_handler(resp))
+                Err(error_handler(resp).await)
             }
         }
         Err(err) => {
