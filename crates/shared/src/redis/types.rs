@@ -11,9 +11,9 @@ use error_stack::IntoReport;
 use fred::{
     interfaces::{ClientLike, PubsubInterface},
     prelude::EventInterface,
-    types::{ConnectHandle, Message, ReconnectPolicy, RedisConfig, RedisValue},
+    types::{ConnectHandle, Message},
 };
-use log::info;
+// use log::info;
 // use futures::{channel::mpsc::{self, UnboundedReceiver, UnboundedSender}, SinkExt};
 use super::error::RedisError;
 use serde::{de::DeserializeOwned, Deserialize};
@@ -112,11 +112,11 @@ impl RedisSettings {
 }
 
 pub struct RedisClient {
-    pub client: fred::prelude::RedisClient,
+    pub client: fred::clients::Client,
 }
 
 impl std::ops::Deref for RedisClient {
-    type Target = fred::prelude::RedisClient;
+    type Target = fred::clients::Client;
     fn deref(&self) -> &Self::Target {
         &self.client
     }
@@ -126,7 +126,7 @@ impl RedisClient {
     pub async fn new(conf: RedisSettings) -> Result<Self, RedisError> {
         let (redis_config, reconnect_policy) = Self::get_config(&conf).await?;
         let client =
-            fred::prelude::RedisClient::new(redis_config, None, None, Some(reconnect_policy));
+            fred::clients::Client::new(redis_config, None, None, Some(reconnect_policy));
         client.connect();
         client
             .wait_for_connect()
@@ -136,7 +136,7 @@ impl RedisClient {
     }
     async fn get_config(
         conf: &RedisSettings,
-    ) -> Result<(RedisConfig, ReconnectPolicy), RedisError> {
+    ) -> Result<(fred::types::config::Config, fred::types::config::ReconnectPolicy), RedisError> {
         let redis_connection_url = match conf.cluster_enabled {
             // Fred relies on this format for specifying cluster where the host port is ignored & only query parameters are used for node addresses
             // redis-cluster://username:password@host:port?node=bar.com:30002&node=baz.com:30003
@@ -155,16 +155,16 @@ impl RedisClient {
                 conf.host, conf.port, conf.partition
             ),
         };
-        let mut config = fred::types::RedisConfig::from_url(&redis_connection_url)
+        let mut config = fred::types::config::Config::from_url(&redis_connection_url)
             .into_report()
             .map_err(|err| RedisError::RedisConnectionError(err.to_string()))?;
 
         if !conf.use_legacy_version {
             config.version = fred::types::RespVersion::RESP3;
         }
-        config.tracing = fred::types::TracingConfig::new(true);
-        config.blocking = fred::types::Blocking::Error;
-        let reconnect_policy = fred::types::ReconnectPolicy::new_constant(
+        config.tracing = fred::types::config::TracingConfig::new(true);
+        config.blocking = fred::types::config::Blocking::Error;
+        let reconnect_policy = fred::types::config::ReconnectPolicy::new_constant(
             conf.reconnect_max_attempts,
             conf.reconnect_delay,
         );
@@ -181,8 +181,8 @@ impl RedisClient {
 }
 
 pub struct RedisConnectionPool {
-    pub reader_pool: fred::prelude::RedisPool,
-    pub writer_pool: fred::prelude::RedisPool,
+    pub reader_pool: fred::clients::Pool,
+    pub writer_pool: fred::clients::Pool,
     join_handles: Vec<ConnectHandle>,
 }
 
@@ -212,7 +212,7 @@ impl RedisConnectionPool {
     }
     async fn instantiate(
         conf: &RedisSettings,
-    ) -> Result<(fred::prelude::RedisPool, Vec<fred::types::ConnectHandle>), RedisError> {
+    ) -> Result<(fred::prelude::Pool, Vec<fred::types::ConnectHandle>), RedisError> {
         let redis_connection_url = match conf.cluster_enabled {
             // Fred relies on this format for specifying cluster where the host port is ignored & only query parameters are used for node addresses
             // redis-cluster://username:password@host:port?node=bar.com:30002&node=baz.com:30003
@@ -231,24 +231,24 @@ impl RedisConnectionPool {
                 conf.host, conf.port, conf.partition
             ),
         };
-        let mut config = fred::types::RedisConfig::from_url(&redis_connection_url)
+        let mut config = fred::types::config::Config::from_url(&redis_connection_url)
             .into_report()
             .map_err(|err| RedisError::RedisConnectionError(err.to_string()))?;
 
         if !conf.use_legacy_version {
             config.version = fred::types::RespVersion::RESP3;
         }
-        config.tracing = fred::types::TracingConfig::new(true);
-        config.blocking = fred::types::Blocking::Error;
-        let reconnect_policy = fred::types::ReconnectPolicy::new_constant(
+        config.tracing = fred::types::config::TracingConfig::new(true);
+        config.blocking = fred::types::config::Blocking::Error;
+        let reconnect_policy = fred::types::config::ReconnectPolicy::new_constant(
             conf.reconnect_max_attempts,
             conf.reconnect_delay,
         );
 
-        let mut performance_config = fred::types::PerformanceConfig::default();
+        let mut performance_config = fred::types::config::PerformanceConfig::default();
         performance_config.broadcast_channel_capacity = conf.broadcast_channel_capacity;
 
-        let pool = fred::prelude::RedisPool::new(
+        let pool = fred::prelude::Pool::new(
             config,
             Some(performance_config),
             None,
@@ -310,7 +310,7 @@ impl RedisConnectionPool {
                     Ok(msg) => {
                         let channel_name = msg.channel.to_string();
                         match &msg.value {
-                            RedisValue::String(val) => match serde_json::from_str::<T>(val) {
+                            fred::types::Value::String(val) => match serde_json::from_str::<T>(val) {
                                 Ok(parsed) => {
                                     if let Err(err) = tx.send((channel_name, parsed, Utc::now())) {
                                         error!("Failed to send message to receiver: {}", err);
@@ -323,7 +323,7 @@ impl RedisConnectionPool {
                                     );
                                 }
                             },
-                            RedisValue::Null => {
+                            fred::types::Value::Null => {
                                 error!("Received null value on channel '{}'", channel_name);
                             }
                             other => {
@@ -368,12 +368,12 @@ impl RedisConnectionPool {
                     Ok(msg) => {
                         let channel_name = msg.channel.to_string();
                         match &msg.value {
-                            RedisValue::String(val) => {
+                            fred::types::Value::String(val) => {
                                 if let Err(err) = tx.send((channel_name, val.to_string())) {
                                     error!("Failed to send message to receiver: {}", err);
                                 }
                             }
-                            RedisValue::Null => {
+                            fred::types::Value::Null => {
                                 error!("Received null value on channel '{}'", channel_name);
                             }
                             other => {
