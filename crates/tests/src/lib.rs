@@ -66,10 +66,13 @@ async fn test_download_files_from_directory() {
 }
 
 #[tokio::test]
+#[ignore] // Requires GCS credentials - run with: cargo test -- --ignored
 async fn test_list_objects_gcs() {
     use shared::tools::gcs::GCSClient;
+    use std::env;
 
-    let bucket = "beckn-image-s3-bucket";
+    let bucket = env::var("GCS_TEST_BUCKET")
+        .unwrap_or_else(|_| "beckn-image-gcs-bucket".to_string());
     let prefix = "";
 
     let gcs_client = match GCSClient::new().await {
@@ -84,7 +87,7 @@ async fn test_list_objects_gcs() {
         }
     };
     
-    let objects = match gcs_client.list_objects_gcs(bucket, prefix).await {
+    let objects = match gcs_client.list_objects_gcs(&bucket, prefix).await {
         Ok(objs) => objs,
         Err(e) => {
             eprintln!("Failed to list objects: {:?}", e);
@@ -103,10 +106,13 @@ async fn test_list_objects_gcs() {
 }
 
 #[tokio::test]
+#[ignore] // Requires GCS credentials - run with: cargo test -- --ignored
 async fn test_download_file_gcs() {
     use shared::tools::gcs::{get_file_from_gcs, GCSClient};
+    use std::env;
 
-    let bucket = "beckn-image-s3-bucket";
+    let bucket = env::var("GCS_TEST_BUCKET")
+        .unwrap_or_else(|_| "beckn-image-gcs-bucket".to_string());
     
     // First, let's list objects to find a file to download
     let gcs_client = match GCSClient::new().await {
@@ -120,7 +126,7 @@ async fn test_download_file_gcs() {
         }
     };
     
-    let objects = match gcs_client.list_objects_gcs(bucket, "").await {
+    let objects = match gcs_client.list_objects_gcs(&bucket, "").await {
         Ok(objs) => objs,
         Err(e) => {
             eprintln!("Failed to list objects: {:?}", e);
@@ -138,7 +144,7 @@ async fn test_download_file_gcs() {
     println!("Testing download of: {}/{}", bucket, key);
 
     // Download the file
-    let data = match get_file_from_gcs(bucket, key).await {
+    let data = match get_file_from_gcs(&bucket, key).await {
         Ok(data) => data,
         Err(e) => {
             eprintln!("Failed to download file: {:?}", e);
@@ -168,16 +174,19 @@ async fn test_download_file_gcs() {
 }
 
 #[tokio::test]
+#[ignore] // Requires GCS credentials - run with: cargo test -- --ignored
 async fn test_download_files_from_directory_gcs() {
     use shared::tools::gcs::get_files_in_directory_from_gcs;
+    use std::env;
 
-    let bucket = "beckn-image-s3-bucket";
+    let bucket = env::var("GCS_TEST_BUCKET")
+        .unwrap_or_else(|_| "beckn-image-gcs-bucket".to_string());
     let prefix = ""; // Empty prefix means root of bucket
 
     println!("Downloading files from GCS bucket: {} with prefix: '{}'", bucket, prefix);
 
     // Download the files
-    let data = match get_files_in_directory_from_gcs(bucket, prefix).await {
+    let data = match get_files_in_directory_from_gcs(&bucket, prefix).await {
         Ok(files) => files,
         Err(e) => {
             eprintln!("Failed to download files from directory: {:?}", e);
@@ -203,15 +212,18 @@ async fn test_download_files_from_directory_gcs() {
 }
 
 #[tokio::test]
+#[ignore] // Requires GCS credentials - run with: cargo test -- --ignored
 async fn test_cloud_storage_wrapper_gcs() {
     use shared::tools::cloud_storage::{get_files_in_directory, CloudProvider};
+    use std::env;
 
-    let bucket = "beckn-image-s3-bucket";
+    let bucket = env::var("GCS_TEST_BUCKET")
+        .unwrap_or_else(|_| "beckn-image-gcs-bucket".to_string());
     let prefix = "";
 
     println!("Testing cloud storage wrapper with GCS provider");
 
-    let files = match get_files_in_directory(CloudProvider::GCS, bucket, prefix).await {
+    let files = match get_files_in_directory(CloudProvider::GCS, &bucket, prefix).await {
         Ok(files) => files,
         Err(e) => {
             eprintln!("Failed to get files: {:?}", e);
@@ -231,15 +243,18 @@ async fn test_cloud_storage_wrapper_gcs() {
 }
 
 #[tokio::test]
+#[ignore] // Requires GCS credentials - run with: cargo test -- --ignored
 async fn test_cloud_storage_wrapper_from_str() {
     use shared::tools::cloud_storage::get_files_in_directory_from_str;
+    use std::env;
 
-    let bucket = "beckn-image-s3-bucket";
+    let bucket = env::var("GCS_TEST_BUCKET")
+        .unwrap_or_else(|_| "beckn-image-gcs-bucket".to_string());
     let prefix = "";
 
     println!("Testing cloud storage wrapper with string provider 'gcs'");
 
-    let files = match get_files_in_directory_from_str("gcs", bucket, prefix).await {
+    let files = match get_files_in_directory_from_str("gcs", &bucket, prefix).await {
         Ok(files) => files,
         Err(e) => {
             eprintln!("Failed to get files: {:?}", e);
@@ -250,7 +265,7 @@ async fn test_cloud_storage_wrapper_from_str() {
     println!("Successfully fetched {} files using string-based wrapper", files.len());
     
     // Test invalid provider
-    let result = get_files_in_directory_from_str("invalid", bucket, prefix).await;
+    let result = get_files_in_directory_from_str("invalid", &bucket, prefix).await;
     assert!(result.is_err(), "Should fail with invalid provider");
     println!("Correctly rejected invalid provider 'invalid'");
 }
