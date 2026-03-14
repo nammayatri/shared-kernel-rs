@@ -281,8 +281,6 @@ where
     U: Serialize + Debug,
     E: ResponseError + convert::From<CallAPIError>,
 {
-    let start_time = std::time::Instant::now();
-
     let client = match protocol {
         Protocol::Http1 => Ok(Client::new()),
         Protocol::Http2 => Client::builder()
@@ -292,6 +290,27 @@ where
                 CallAPIError::InternalError(format!("Http2 client builder error : {err}"))
             }),
     }?;
+
+    call_api_with_client(&client, method, url, headers, body, service, error_handler).await
+}
+
+/// Like `call_api_unwrapping_error` but accepts a pre-built `reqwest::Client` so callers can
+/// reuse a connection-pooled client across calls instead of creating a new one each time.
+pub async fn call_api_with_client<T, U, E>(
+    client: &Client,
+    method: Method,
+    url: &Url,
+    headers: Vec<(&str, &str)>,
+    body: Option<U>,
+    service: Option<&str>,
+    error_handler: Box<dyn Fn(Response) -> Pin<Box<dyn Future<Output = E> + Send>> + Send + Sync>,
+) -> Result<T, E>
+where
+    T: DeserializeOwned + 'static,
+    U: Serialize + Debug,
+    E: ResponseError + convert::From<CallAPIError>,
+{
+    let start_time = std::time::Instant::now();
 
     let mut header_map = HeaderMap::new();
 
