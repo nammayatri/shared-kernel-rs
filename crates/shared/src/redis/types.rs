@@ -13,17 +13,12 @@ use fred::{
     prelude::EventInterface,
     types::{ConnectHandle, Message, ReconnectPolicy, RedisConfig, RedisValue},
 };
-use log::info;
 // use futures::{channel::mpsc::{self, UnboundedReceiver, UnboundedSender}, SinkExt};
 use super::error::RedisError;
 use serde::{de::DeserializeOwned, Deserialize};
+use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc;
-use tokio::sync::{
-    broadcast::Receiver,
-    mpsc::{UnboundedReceiver, UnboundedSender},
-};
 use tracing::error;
-use tracing::*;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Point {
@@ -117,6 +112,7 @@ pub struct RedisClient {
 
 impl std::ops::Deref for RedisClient {
     type Target = fred::prelude::RedisClient;
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.client
     }
@@ -245,8 +241,10 @@ impl RedisConnectionPool {
             conf.reconnect_delay,
         );
 
-        let mut performance_config = fred::types::PerformanceConfig::default();
-        performance_config.broadcast_channel_capacity = conf.broadcast_channel_capacity;
+        let performance_config = fred::types::PerformanceConfig {
+            broadcast_channel_capacity: conf.broadcast_channel_capacity,
+            ..Default::default()
+        };
 
         let pool = fred::prelude::RedisPool::new(
             config,
@@ -286,10 +284,7 @@ impl RedisConnectionPool {
     where
         T: DeserializeOwned + Send + 'static,
     {
-        let (tx, mut rx): (
-            UnboundedSender<(String, T, DateTime<Utc>)>,
-            UnboundedReceiver<(String, T, DateTime<Utc>)>,
-        ) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::unbounded_channel();
 
         let redis_connection = self.reader_pool.next();
         redis_connection.subscribe(channel).await.map_err(|e| {
@@ -303,10 +298,7 @@ impl RedisConnectionPool {
             loop {
                 let res = message_stream.recv().await;
                 match res {
-                    Err(err) => error!(
-                        "Error in receiving message from Redis, err : {}",
-                        err.to_string()
-                    ),
+                    Err(err) => error!("Error in receiving message from Redis, err : {}", err),
                     Ok(msg) => {
                         let channel_name = msg.channel.to_string();
                         match &msg.value {
@@ -344,10 +336,7 @@ impl RedisConnectionPool {
         &self,
         channel: &str,
     ) -> Result<mpsc::UnboundedReceiver<(String, String)>, RedisError> {
-        let (tx, mut rx): (
-            UnboundedSender<(String, String)>,
-            UnboundedReceiver<(String, String)>,
-        ) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::unbounded_channel();
 
         let redis_connection = self.reader_pool.next();
         redis_connection.subscribe(channel).await.map_err(|e| {
@@ -361,10 +350,7 @@ impl RedisConnectionPool {
             loop {
                 let res = message_stream.recv().await;
                 match res {
-                    Err(err) => error!(
-                        "Error in receiving message from Redis, err : {}",
-                        err.to_string()
-                    ),
+                    Err(err) => error!("Error in receiving message from Redis, err : {}", err),
                     Ok(msg) => {
                         let channel_name = msg.channel.to_string();
                         match &msg.value {

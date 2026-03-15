@@ -60,7 +60,7 @@ pub static INCOMING_API: once_cell::sync::Lazy<HistogramVec> = once_cell::sync::
 macro_rules! incoming_api {
     ($method:expr, $endpoint:expr, $status:expr, $code:expr, $start:expr) => {
         let duration = $start.elapsed().as_secs_f64();
-        let version = std::env::var("DEPLOYMENT_VERSION").unwrap_or("DEV".to_string());
+        let version = std::env::var("DEPLOYMENT_VERSION").unwrap_or_else(|_| "DEV".to_owned());
         INCOMING_API
             .with_label_values(&[$method, $endpoint, $status, $code, version.as_str()])
             .observe(duration);
@@ -91,7 +91,7 @@ macro_rules! call_external_api {
 macro_rules! termination {
     ($type_:expr, $start:expr) => {
         let duration = $start.elapsed().as_secs_f64();
-        let version = std::env::var("DEPLOYMENT_VERSION").unwrap_or("DEV".to_string());
+        let version = std::env::var("DEPLOYMENT_VERSION").unwrap_or_else(|_| "DEV".to_owned());
         TERMINATION
             .with_label_values(&[$type_, version.as_str()])
             .observe(duration);

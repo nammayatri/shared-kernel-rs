@@ -20,9 +20,11 @@ pub fn measure_duration(_: TokenStream, input: TokenStream) -> TokenStream {
     let generics = &input_fn.sig.generics;
     let where_clause = &input_fn.sig.generics.where_clause;
     let is_async = input_fn.sig.asyncness.is_some();
+    let attrs = &input_fn.attrs;
 
     let expanded = if is_async {
         quote! {
+            #(#attrs)*
             pub async fn #fn_name #generics(#args) #return_type #where_clause {
                 let start_time = std::time::Instant::now();
                 let result = #function_body;
@@ -35,6 +37,7 @@ pub fn measure_duration(_: TokenStream, input: TokenStream) -> TokenStream {
         }
     } else {
         quote! {
+            #(#attrs)*
             pub fn #fn_name #generics(#args) #return_type #where_clause {
                 let start_time = std::time::Instant::now();
                 let result = #function_body;

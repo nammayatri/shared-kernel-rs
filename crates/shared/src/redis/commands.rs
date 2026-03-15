@@ -413,7 +413,7 @@ impl RedisConnectionPool {
         }
 
         pipeline
-            .all()
+            .all::<RedisValue>()
             .await
             .map_err(|err| RedisError::DeleteFailed(err.to_string()))?;
 
@@ -617,9 +617,9 @@ impl RedisConnectionPool {
                                 .map_err(|err| RedisError::DeserializationError(err.to_string()))?;
                             Ok((key, value))
                         } else {
-                            Err(RedisError::GetHashFieldFailed(format!(
-                                "Unexpected RedisValue encountered"
-                            )))
+                            Err(RedisError::GetHashFieldFailed(
+                                "Unexpected RedisValue encountered".to_owned(),
+                            ))
                         }
                     })
                     .collect::<Result<HashMap<String, T>, RedisError>>()?;
@@ -1559,7 +1559,8 @@ impl RedisConnectionPool {
         F: Into<RedisKey> + Send,
         V: Into<RedisValue> + Send,
     {
-        self.writer_pool
+        let _: RedisValue = self
+            .writer_pool
             .xadd(
                 key,
                 false,
@@ -1615,7 +1616,7 @@ impl RedisConnectionPool {
                                 let mut field_values = Vec::new();
 
                                 // Extract the stream ID, assuming it's the first element in the array.
-                                if let Some(RedisValue::String(id)) = entry_array.get(0) {
+                                if let Some(RedisValue::String(id)) = entry_array.first() {
                                     field_values.push(("stream_id".to_string(), id.to_string()));
                                 }
 

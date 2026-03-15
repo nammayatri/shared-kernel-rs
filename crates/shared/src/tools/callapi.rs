@@ -20,10 +20,15 @@ use std::{convert, fmt::Debug, pin::Pin};
 use std::{future::Future, str::FromStr};
 use tracing::{error, info};
 
+type ErrorHandler<E> =
+    Box<dyn Fn(Response) -> Pin<Box<dyn Future<Output = E> + Send>> + Send + Sync>;
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorBody {
+    #[serde(skip_serializing_if = "String::is_empty")]
     error_message: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub error_code: String,
 }
 
@@ -37,22 +42,24 @@ pub enum CallAPIError {
 }
 
 impl CallAPIError {
+    #[inline]
     fn error_message(&self) -> ErrorBody {
         ErrorBody {
             error_message: self.message(),
-            error_code: self.code(),
+            error_code: self.code().to_owned(),
         }
     }
 
+    #[inline]
     pub fn message(&self) -> String {
         match self {
-            CallAPIError::InternalError(err) => err.to_string(),
-            CallAPIError::InvalidRequest(err) => err.to_string(),
-            _ => "Some Error Occured".to_string(),
+            CallAPIError::InternalError(err) | CallAPIError::InvalidRequest(err) => err.clone(),
+            _ => "Some Error Occured".to_owned(),
         }
     }
 
-    fn code(&self) -> String {
+    #[inline]
+    fn code(&self) -> &'static str {
         match self {
             CallAPIError::InternalError(_) => "INTERNAL_ERROR",
             CallAPIError::InvalidRequest(_) => "INVALID_REQUEST",
@@ -60,17 +67,18 @@ impl CallAPIError {
             CallAPIError::SerializationError(_) => "SERIALIZATION_ERROR",
             CallAPIError::DeserializationError(_) => "DESERIALIZATION_ERROR",
         }
-        .to_string()
     }
 }
 
 impl ResponseError for CallAPIError {
+    #[inline]
     fn error_response(&self) -> HttpResponse {
         HttpResponse::build(self.status_code())
             .insert_header(ContentType::json())
             .json(self.error_message())
     }
 
+    #[inline]
     fn status_code(&self) -> StatusCode {
         match self {
             CallAPIError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -186,7 +194,7 @@ where
         Err(err) => err
             .status()
             .map(|status| status.to_string())
-            .unwrap_or("UNKNOWN".to_string()),
+            .unwrap_or_else(|| "UNKNOWN".to_owned()),
     };
 
     call_external_api!(
@@ -238,13 +246,13 @@ where
 /// * `headers` - A vector of header key-value pairs to include in the request.
 /// * `body` - An optional request body. If provided, it will be serialized to JSON.
 /// * `error_handler` - A boxed function that takes a `Response` and returns an `CallAPIError`.
-///                     This is used to convert non-successful responses into appropriate errors.
+///   This is used to convert non-successful responses into appropriate errors.
 ///
 /// # Returns
 ///
 /// * `Ok(T)` if the API call succeeds and the response can be deserialized into type `T`.
 /// * `Err(CallAPIError)` if there's any error during the API call, serialization, deserialization,
-///                   or if the response status indicates an error.
+///   or if the response status indicates an error.
 ///
 /// # Type Parameters
 ///
@@ -274,7 +282,7 @@ pub async fn call_api_unwrapping_error<T, U, E>(
     headers: Vec<(&str, &str)>,
     body: Option<U>,
     service: Option<&str>,
-    error_handler: Box<dyn Fn(Response) -> Pin<Box<dyn Future<Output = E> + Send>> + Send + Sync>,
+    error_handler: ErrorHandler<E>,
 ) -> Result<T, E>
 where
     T: DeserializeOwned + 'static,
@@ -303,7 +311,7 @@ pub async fn call_api_with_client<T, U, E>(
     headers: Vec<(&str, &str)>,
     body: Option<U>,
     service: Option<&str>,
-    error_handler: Box<dyn Fn(Response) -> Pin<Box<dyn Future<Output = E> + Send>> + Send + Sync>,
+    error_handler: ErrorHandler<E>,
 ) -> Result<T, E>
 where
     T: DeserializeOwned + 'static,
@@ -349,7 +357,7 @@ where
         Err(err) => err
             .status()
             .map(|status| status.to_string())
-            .unwrap_or("UNKNOWN".to_string()),
+            .unwrap_or_else(|| "UNKNOWN".to_owned()),
     };
 
     call_external_api!(

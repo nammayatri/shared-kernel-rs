@@ -22,11 +22,15 @@ impl FromStr for CloudProvider {
     /// Supported values:
     /// - AWS: "aws", "s3"
     /// - GCS: "gcs", "gcp", "google"
+    #[inline]
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_uppercase().as_str() {
             "AWS" | "S3" => Ok(CloudProvider::AWS),
             "GCS" | "GCP" | "GOOGLE" => Ok(CloudProvider::GCS),
-            _ => Err(format!("Invalid cloud provider: '{}'. Supported values: aws, s3, gcs, gcp, google", s)),
+            _ => Err(format!(
+                "Invalid cloud provider: '{}'. Supported values: aws, s3, gcs, gcp, google",
+                s
+            )),
         }
     }
 }
@@ -34,6 +38,7 @@ impl FromStr for CloudProvider {
 impl CloudProvider {
     /// Parse from string (case-insensitive) - returns Option for backward compatibility
     #[deprecated(note = "Use std::str::FromStr::from_str or parse() instead")]
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         s.parse().ok()
     }
@@ -176,12 +181,10 @@ pub async fn get_files_in_directory_from_str(
     bucket: &str,
     prefix: &str,
 ) -> Result<HashMap<String, Vec<u8>>, CloudStorageError> {
-    let provider = provider_str
-        .parse::<CloudProvider>()
-        .map_err(|e| {
-            error_stack::Report::new(CloudStorageError::InvalidProvider(provider_str.to_string()))
-                .attach_printable(e)
-        })?;
+    let provider = provider_str.parse::<CloudProvider>().map_err(|e| {
+        error_stack::Report::new(CloudStorageError::InvalidProvider(provider_str.to_string()))
+            .attach_printable(e)
+    })?;
 
     get_files_in_directory(provider, bucket, prefix).await
 }

@@ -65,12 +65,15 @@ where
         Box::pin(async move {
             match fut.await {
                 Ok(response) => {
+                    let resp_headers = get_headers(response.request());
+                    let resp_method = get_method(response.request());
+                    let resp_path = get_path(response.request());
                     calculate_metrics(
                         response.response().error(),
                         response.status(),
-                        get_headers(response.request()),
-                        get_method(response.request()),
-                        get_path(response.request()),
+                        &resp_headers,
+                        &resp_method,
+                        &resp_path,
                         start_time,
                     );
                     Ok(response)
@@ -80,9 +83,9 @@ where
                     calculate_metrics(
                         Some(&err),
                         err_resp_status,
-                        req_headers,
-                        req_method,
-                        req_path,
+                        &req_headers,
+                        &req_method,
+                        &req_path,
                         start_time,
                     );
                     Err(err)

@@ -38,7 +38,9 @@ impl AWSClient {
     /// 5. EKS pod identity (when running in EKS)
     pub async fn new() -> Result<Self, AWSError> {
         // Load configuration from environment, credentials file, and instance profile
-        let config = aws_config::from_env().load().await;
+        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .load()
+            .await;
 
         let client = Client::new(&config);
 
@@ -110,17 +112,17 @@ impl AWSClient {
                 ))
             })?;
 
-            if let Some(contents) = response.contents.to_owned() {
+            if let Some(contents) = &response.contents {
                 for object in contents {
                     if let Some(key) = object.key() {
-                        objects.push(key.to_string());
+                        objects.push(key.to_owned());
                     }
                 }
             }
 
             // Check if there are more objects to fetch
             if let Some(next_continuation_token) = response.next_continuation_token() {
-                continuation_token = Some(next_continuation_token.to_string());
+                continuation_token = Some(next_continuation_token.to_owned());
             } else {
                 break;
             }

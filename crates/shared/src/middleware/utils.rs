@@ -10,9 +10,14 @@ use crate::incoming_api;
 use crate::tools::prometheus::INCOMING_API;
 use actix_http::StatusCode;
 use actix_web::{Error, HttpRequest};
+use once_cell::sync::Lazy;
 use regex::Regex;
 use tokio::time::Instant;
 use tracing::{error, info};
+
+static UUID_REGEX: Lazy<Option<Regex>> = Lazy::new(|| {
+    Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}").ok()
+});
 
 /// Get the path from the HTTP request.
 ///
@@ -25,21 +30,18 @@ use tracing::{error, info};
 /// * `String` - The path string with placeholders for matched info.
 pub fn get_path(request: &HttpRequest) -> String {
     let mut path = urlencoding::decode(request.path())
-        .ok()
-        .map(|s| s.to_string())
-        .unwrap_or(request.path().to_string());
+        .map(|s| s.into_owned())
+        .unwrap_or_else(|_| request.path().to_owned());
 
     request
         .match_info()
         .iter()
         .for_each(|(path_name, path_val)| {
-            path = path.replace(path_val, format!(":{path_name}").as_str());
+            path = path.replace(path_val, &format!(":{path_name}"));
         });
 
-    if let Ok(re) =
-        Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
-    {
-        path = re.replace_all(&path, ":id").to_string()
+    if let Some(re) = UUID_REGEX.as_ref() {
+        path = re.replace_all(&path, ":id").into_owned();
     }
 
     path
@@ -54,6 +56,7 @@ pub fn get_path(request: &HttpRequest) -> String {
 ///
 /// # Returns
 /// * `String` - The HTTP method as a string.
+#[inline]
 pub fn get_method(request: &HttpRequest) -> String {
     request.method().to_string()
 }
@@ -67,6 +70,7 @@ pub fn get_method(request: &HttpRequest) -> String {
 ///
 /// # Returns
 /// * `String` - A formatted string representation of the headers.
+#[inline]
 pub fn get_headers(request: &HttpRequest) -> String {
     format!("{:?}", request.headers())
 }
@@ -86,29 +90,23 @@ pub fn get_headers(request: &HttpRequest) -> String {
 pub fn calculate_metrics(
     err_resp: Option<&Error>,
     resp_status: StatusCode,
-    req_headers: String,
-    req_method: String,
-    req_path: String,
+    req_headers: &str,
+    req_method: &str,
+    req_path: &str,
     time: Instant,
 ) {
     if let Some(err_resp) = err_resp {
         let err_resp_code = err_resp.to_string();
         error!(tag = "[INCOMING API - ERROR]", request_method = %req_method, request_path = %req_path, request_headers = req_headers, response_code = err_resp_code, response_status = resp_status.as_str(), latency = format!("{:?}ms", time.elapsed().as_millis()));
         incoming_api!(
-            req_method.as_str(),
-            req_path.as_str(),
+            req_method,
+            req_path,
             resp_status.as_str(),
             err_resp_code.as_str(),
             time
         );
     } else {
         info!(tag = "[INCOMING API]", request_method = %req_method, request_path = %req_path, request_headers = req_headers, response_status = resp_status.as_str(), latency = format!("{:?}ms", time.elapsed().as_millis()));
-        incoming_api!(
-            req_method.as_str(),
-            req_path.as_str(),
-            resp_status.as_str(),
-            "SUCCESS",
-            time
-        );
+        incoming_api!(req_method, req_path, resp_status.as_str(), "SUCCESS", time);
     }
 }
