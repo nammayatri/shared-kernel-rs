@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorBody {
+    #[serde(skip_serializing_if = "String::is_empty")]
     error_message: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub error_code: String,
 }
 
@@ -61,51 +63,54 @@ pub enum RedisError {
 }
 
 impl RedisError {
+    #[inline]
     fn error_message(&self) -> ErrorBody {
         ErrorBody {
             error_message: self.message(),
-            error_code: self.code(),
+            error_code: self.code().to_owned(),
         }
     }
 
+    #[inline]
     pub fn message(&self) -> String {
         match self {
-            RedisError::SerializationError(err) => err.to_string(),
-            RedisError::DeserializationError(err) => err.to_string(),
+            RedisError::SerializationError(err) => err.clone(),
+            RedisError::DeserializationError(err) => err.clone(),
             RedisError::RedisConnectionError(err) => format!("Redis Connection Error : {err}"),
-            RedisError::TtlFailed(err) => format!("Redis Error : {err}"),
-            RedisError::SetFailed(err) => format!("Redis Error : {err}"),
-            RedisError::SetExFailed(err) => format!("Redis Error : {err}"),
-            RedisError::SetExpiryFailed(err) => format!("Redis Error : {err}"),
-            RedisError::GetFailed(err) => format!("Redis Error : {err}"),
-            RedisError::MGetFailed(err) => format!("Redis Error : {err}"),
-            RedisError::DeleteFailed(err) => format!("Redis Error : {err}"),
-            RedisError::SetHashFieldFailed(err) => format!("Redis Error : {err}"),
-            RedisError::GetHashFieldFailed(err) => format!("Redis Error : {err}"),
-            RedisError::DeleteHashFieldFailed(err) => format!("Redis Error : {err}"),
-            RedisError::DeleteHashFieldsFailed(err) => format!("Redis Error : {err}"),
-            RedisError::RPushFailed(err) => format!("Redis Error : {err}"),
-            RedisError::RPopFailed(err) => format!("Redis Error : {err}"),
-            RedisError::LPopFailed(err) => format!("Redis Error : {err}"),
-            RedisError::LRangeFailed(err) => format!("Redis Error : {err}"),
-            RedisError::LLenFailed(err) => format!("Redis Error : {err}"),
-            RedisError::NotFound(err) => format!("Redis Error : {err}"),
-            RedisError::InvalidRedisEntryId(err) => format!("Redis Error : {err}"),
-            RedisError::SubscribeError(err) => format!("Redis Error : {err}"),
-            RedisError::PublishError(err) => format!("Redis Error : {err}"),
-            RedisError::GeoAddFailed(err) => format!("Redis Error : {err}"),
-            RedisError::ZAddFailed(err) => format!("Redis Error : {err}"),
-            RedisError::ZremrangeByRankFailed(err) => format!("Redis Error : {err}"),
-            RedisError::GeoSearchFailed(err) => format!("Redis Error : {err}"),
-            RedisError::ZCardFailed(err) => format!("Redis Error : {err}"),
-            RedisError::GeoPosFailed(err) => format!("Redis Error : {err}"),
-            RedisError::ZRangeFailed(err) => format!("Redis Error : {err}"),
-            RedisError::XReadFailed(err) => format!("Redis Error : {err}"),
-            _ => "Some Error Occured".to_string(),
+            RedisError::TtlFailed(err)
+            | RedisError::SetFailed(err)
+            | RedisError::SetExFailed(err)
+            | RedisError::SetExpiryFailed(err)
+            | RedisError::GetFailed(err)
+            | RedisError::MGetFailed(err)
+            | RedisError::DeleteFailed(err)
+            | RedisError::SetHashFieldFailed(err)
+            | RedisError::GetHashFieldFailed(err)
+            | RedisError::DeleteHashFieldFailed(err)
+            | RedisError::DeleteHashFieldsFailed(err)
+            | RedisError::RPushFailed(err)
+            | RedisError::RPopFailed(err)
+            | RedisError::LPopFailed(err)
+            | RedisError::LRangeFailed(err)
+            | RedisError::LLenFailed(err)
+            | RedisError::NotFound(err)
+            | RedisError::InvalidRedisEntryId(err)
+            | RedisError::SubscribeError(err)
+            | RedisError::PublishError(err)
+            | RedisError::GeoAddFailed(err)
+            | RedisError::ZAddFailed(err)
+            | RedisError::ZremrangeByRankFailed(err)
+            | RedisError::GeoSearchFailed(err)
+            | RedisError::ZCardFailed(err)
+            | RedisError::GeoPosFailed(err)
+            | RedisError::ZRangeFailed(err)
+            | RedisError::XReadFailed(err) => format!("Redis Error : {err}"),
+            _ => "Some Error Occured".to_owned(),
         }
     }
 
-    fn code(&self) -> String {
+    #[inline]
+    fn code(&self) -> &'static str {
         match self {
             RedisError::SerializationError(_) => "SERIALIZATION_ERROR",
             RedisError::DeserializationError(_) => "DESERIALIZATION_ERROR",
@@ -145,17 +150,18 @@ impl RedisError {
             RedisError::ClusterShardsToNodeError(_) => "CLUSTER_SHARDS_TO_NODE_ERROR",
             RedisError::ClusterKeySlotError(_) => "CLUSTER_KEY_SLOT_ERROR",
         }
-        .to_string()
     }
 }
 
 impl ResponseError for RedisError {
+    #[inline]
     fn error_response(&self) -> HttpResponse {
         HttpResponse::build(self.status_code())
             .insert_header(ContentType::json())
             .json(self.error_message())
     }
 
+    #[inline]
     fn status_code(&self) -> StatusCode {
         match self {
             RedisError::SerializationError(_) => StatusCode::INTERNAL_SERVER_ERROR,

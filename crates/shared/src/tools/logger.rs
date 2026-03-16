@@ -26,6 +26,7 @@ pub enum LogLevel {
 }
 
 impl From<LogLevel> for LevelFilter {
+    #[inline]
     fn from(log_level: LogLevel) -> Self {
         match log_level {
             LogLevel::TRACE => LevelFilter::TRACE,
@@ -75,7 +76,7 @@ pub struct LoggerConfig {
 pub fn setup_tracing(logger_cfg: LoggerConfig) -> WorkerGuard {
     LogTracer::init().expect("Failed to setup logger");
 
-    let app_name = concat!(env!("CARGO_PKG_NAME"), "-", env!("CARGO_PKG_VERSION")).to_string();
+    let app_name = concat!(env!("CARGO_PKG_NAME"), "-", env!("CARGO_PKG_VERSION"));
 
     let (non_blocking_console_writer, guard) = tracing_appender::non_blocking(std::io::stdout());
 
