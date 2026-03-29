@@ -7,18 +7,18 @@
 */
 #![allow(clippy::unwrap_used)]
 
-use crate::measure_latency_duration;
+use crate::{measure_latency_duration, redis::commands};
 use crate::redis::error::RedisError;
 use crate::redis::types::*;
 use crate::tools::prometheus::MEASURE_DURATION;
+use fred::types::sorted_sets::{Ordering, ZSort};
 use fred::{
     prelude::{
         ClusterInterface, GeoInterface, HashesInterface, KeysInterface, ListInterface,
         SortedSetsInterface, StreamsInterface,
     },
     types::{
-        XID::{self, Auto, Manual},
-        *,
+        self, streams::XID::{self, Manual}, *
     },
 };
 use rustc_hash::FxHashMap;
@@ -31,14 +31,14 @@ impl RedisConnectionPool {
     ///
     /// This function allows for setting a key with a specified value and an expiration time in Redis.
     /// It leverages the `fred` crate to interact with the Redis datastore. The function is generic
-    /// over the value type, allowing different types that can be converted into a `RedisValue`.
+    /// over the value type, allowing different types that can be converted into a `types::Value`.
     ///
     /// # Type Parameters
-    /// * `V` - The type of the value to be set in the datastore. The type must implement the `TryInto<RedisValue>` trait.
+    /// * `V` - The type of the value to be set in the datastore. The type must implement the `TryInto<types::Value>` trait.
     ///
     /// # Arguments
     /// * `key` - A reference to the string representing the key to be set in the datastore.
-    /// * `value` - The value to be associated with the key. It is generic and can be any type that implements `TryInto<RedisValue>`.
+    /// * `value` - The value to be associated with the key. It is generic and can be any type that implements `TryInto<types::Value>`.
     /// * `expiry` - The expiration time of the key-value pair, specified in seconds.
     ///
     /// # Returns
@@ -48,7 +48,7 @@ impl RedisConnectionPool {
     /// # Errors
     /// This function will return an error:
     /// * If there is a failure in setting the value associated with the key in Redis.
-    /// * If the value type `V` fails to convert into `RedisValue`.
+    /// * If the value type `V` fails to convert into `types::Value`.
     #[macros::measure_duration]
     pub async fn set_key<V>(&self, key: &str, value: V, expiry: u32) -> Result<(), RedisError>
     where
@@ -57,7 +57,7 @@ impl RedisConnectionPool {
         let serialized_value = serde_json::to_string(&value)
             .map_err(|err| RedisError::SerializationError(err.to_string()))?;
 
-        let redis_value: RedisValue = serialized_value.into();
+        let redis_value: types::Value = serialized_value.into();
 
         self.writer_pool
             .set(
@@ -79,7 +79,7 @@ impl RedisConnectionPool {
         let serialized_value = serde_json::to_string(&value)
             .map_err(|err| RedisError::SerializationError(err.to_string()))?;
 
-        let redis_value: RedisValue = serialized_value.into();
+        let redis_value: types::Value = serialized_value.into();
 
         self.writer_pool
             .set(key, redis_value, None, None, false)
@@ -94,7 +94,7 @@ impl RedisConnectionPool {
         value: &str,
         expiry: u32,
     ) -> Result<(), RedisError> {
-        let redis_value: RedisValue = value.into();
+        let redis_value: types::Value = value.into();
         self.writer_pool
             .set(
                 key,
@@ -109,7 +109,7 @@ impl RedisConnectionPool {
 
     #[macros::measure_duration]
     pub async fn ttl(&self, key: &str) -> Result<Ttl, RedisError> {
-        let output: RedisValue = self
+        let output: types::Value = self
             .reader_pool
             .ttl(key)
             .await
@@ -126,7 +126,7 @@ impl RedisConnectionPool {
                 }
             }
             None => Err(RedisError::TtlFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
+                "Unexpected types::Value encountered : {:?}",
                 output
             ))),
         }
@@ -136,14 +136,14 @@ impl RedisConnectionPool {
     ///
     /// This function aims to perform a conditional set operation (SETNX) followed by setting an expiration time on the key.
     /// It uses a pipeline to combine the `SETNX` and `EXPIRE` commands for atomic execution. The function is generic
-    /// over the value type, allowing different types that can be converted into a `RedisValue`.
+    /// over the value type, allowing different types that can be converted into a `types::Value`.
     ///
     /// # Type Parameters
-    /// * `V` - The type of the value to be set in the datastore. The type must implement the `TryInto<RedisValue>` trait.
+    /// * `V` - The type of the value to be set in the datastore. The type must implement the `TryInto<types::Value>` trait.
     ///
     /// # Arguments
     /// * `key` - A reference to the string representing the key to be set in the datastore.
-    /// * `value` - The value to be associated with the key. It is generic and can be any type that implements `TryInto<RedisValue>`.
+    /// * `value` - The value to be associated with the key. It is generic and can be any type that implements `TryInto<types::Value>`.
     /// * `expiry` - The expiration time of the key-value pair, specified in seconds.
     ///
     /// # Returns
@@ -154,33 +154,32 @@ impl RedisConnectionPool {
     /// # Errors
     /// This function will return an error:
     /// * If there is a failure in setting the value associated with the key or applying the expiration time in Redis.
-    /// * If the value type `V` fails to convert into `RedisValue`.
+    /// * If the value type `V` fails to convert into `types::Value`.
     /// * If an unexpected case is encountered during the operation.
     #[macros::measure_duration]
     pub async fn setnx_with_expiry<V>(
         &self,
         key: &str,
-        value: V,
+        value: types::Value,
         expiry: i64,
     ) -> Result<bool, RedisError>
-    where
-        V: TryInto<RedisValue> + Debug + Send + Sync,
-        V::Error: Into<fred::error::RedisError> + Send + Sync,
     {
         let pipeline = self.writer_pool.next().pipeline();
-        let _ = pipeline.msetnx::<RedisValue, _>((key, value)).await;
-        let _ = pipeline.expire::<(), &str>(key, expiry).await;
+        let mut map = fred::types::Map::new();
+        map.insert(fred::types::Key::from(key), value);
+        let _: Result<(), _> = pipeline.msetnx(map).await;
+        let _ = pipeline.expire::<(), &str>(key, expiry, None).await;
 
-        let output: Vec<RedisValue> = pipeline
+        let output: Vec<types::Value> = pipeline
             .all()
             .await
             .map_err(|err| RedisError::SetExFailed(err.to_string()))?;
 
         match output.deref() {
-            [RedisValue::Integer(1), ..] => Ok(true),
-            [RedisValue::Integer(0), ..] => Ok(false),
+            [types::Value::Integer(1), ..] => Ok(true),
+            [types::Value::Integer(0), ..] => Ok(false),
             case => Err(RedisError::SetExFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
+                "Unexpected types::Value encountered : {:?}",
                 case
             ))),
         }
@@ -204,7 +203,7 @@ impl RedisConnectionPool {
     /// This function will return an error if there is a failure in applying the expiration time to the key in Redis.
     #[macros::measure_duration]
     pub async fn set_expiry(&self, key: &str, seconds: i64) -> Result<(), RedisError> {
-        let output: Result<(), _> = self.writer_pool.expire(key, seconds).await;
+        let output: Result<(), _> = self.writer_pool.expire(key, seconds,None).await;
 
         if let Err(err) = output {
             Err(RedisError::SetExpiryFailed(err.to_string()))
@@ -216,7 +215,7 @@ impl RedisConnectionPool {
     /// Asynchronously retrieves the value associated with a specified key in a Redis datastore.
     ///
     /// This function attempts to fetch the value of a specified key from a Redis datastore.
-    /// It handles different cases based on the returned RedisValue. If a string is returned,
+    /// It handles different cases based on the returned types::Value. If a string is returned,
     /// it's converted and wrapped into an Option. If a null value is returned, an Option::None is returned.
     /// Errors and unexpected values result in a custom `RedisError`.
     ///
@@ -235,19 +234,19 @@ impl RedisConnectionPool {
     where
         T: DeserializeOwned,
     {
-        let output: RedisValue = self
+        let output: types::Value = self
             .reader_pool
             .get(key)
             .await
             .map_err(|err| RedisError::GetFailed(err.to_string()))?;
 
         match output {
-            RedisValue::String(val) => serde_json::from_str(&val)
+            types::Value::String(val) => serde_json::from_str(&val)
                 .map(Some)
                 .map_err(|err| RedisError::DeserializationError(err.to_string())),
-            RedisValue::Null => Ok(None),
+            types::Value::Null => Ok(None),
             case => Err(RedisError::GetFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
+                "Unexpected types::Value encountered : {:?}",
                 case
             ))),
         }
@@ -273,17 +272,17 @@ impl RedisConnectionPool {
     /// - If the value retrieved is not a string or is another data type not expected.
     #[macros::measure_duration]
     pub async fn get_key_as_str(&self, key: &str) -> Result<Option<String>, RedisError> {
-        let output: RedisValue = self
+        let output: types::Value = self
             .reader_pool
             .get(key)
             .await
             .map_err(|err| RedisError::GetFailed(err.to_string()))?;
 
         match output {
-            RedisValue::String(val) => Ok(Some(val.to_string())),
-            RedisValue::Null => Ok(None),
+            types::Value::String(val) => Ok(Some(val.to_string())),
+            types::Value::Null => Ok(None),
             case => Err(RedisError::GetFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
+                "Unexpected types::Value encountered : {:?}",
                 case
             ))),
         }
@@ -295,7 +294,7 @@ impl RedisConnectionPool {
     /// An array of keys is passed as an argument, and a vector of `Option<String>` is returned,
     /// where each element represents the value of the corresponding key in the input vector.
     ///
-    /// If the retrieved RedisValue is an array, it gets converted to a vector of `Option<String>`.
+    /// If the retrieved types::Value is an array, it gets converted to a vector of `Option<String>`.
     /// If it's a single string or null value, a vector containing a single `Option<String>` is returned.
     /// Errors and unexpected values result in a custom `RedisError`.
     ///
@@ -318,38 +317,38 @@ impl RedisConnectionPool {
             return Ok(vec![]);
         }
 
-        let keys: Vec<RedisKey> = keys.into_iter().map(RedisKey::from).collect();
+        let keys: Vec<types::Key> = keys.into_iter().map(types::Key::from).collect();
 
-        let output: RedisValue = self
+        let output: types::Value = self
             .reader_pool
             .mget(MultipleKeys::from(keys))
             .await
             .map_err(|err| RedisError::MGetFailed(err.to_string()))?;
 
         match output {
-            RedisValue::Array(val) => {
+            types::Value::Array(val) => {
                 let results = val
                     .into_iter()
                     .map(|v| match v {
-                        RedisValue::String(s) => serde_json::from_str::<T>(&s)
+                        types::Value::String(s) => serde_json::from_str::<T>(&s)
                             .map(Some)
                             .map_err(|err| RedisError::DeserializationError(err.to_string())),
-                        RedisValue::Null => Ok(None),
+                        types::Value::Null => Ok(None),
                         case => Err(RedisError::MGetFailed(format!(
-                            "Unexpected RedisValue encountered : {:?}",
+                            "Unexpected types::Value encountered : {:?}",
                             case
                         ))),
                     })
                     .collect::<Result<Vec<Option<T>>, RedisError>>()?;
                 Ok(results)
             }
-            RedisValue::String(val) => serde_json::from_str::<T>(&val)
+            types::Value::String(val) => serde_json::from_str::<T>(&val)
                 .map(|val| Some(val))
                 .map_err(|err| RedisError::DeserializationError(err.to_string()))
                 .map(|res| vec![res]),
-            RedisValue::Null => Ok(vec![None]),
+            types::Value::Null => Ok(vec![None]),
             case => Err(RedisError::MGetFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
+                "Unexpected types::Value encountered : {:?}",
                 case
             ))),
         }
@@ -409,7 +408,7 @@ impl RedisConnectionPool {
         let pipeline = self.writer_pool.next().pipeline();
 
         for key in keys {
-            let _ = pipeline.del::<RedisValue, &str>(key).await;
+            let _ = pipeline.del::<types::Value, &str>(key).await;
         }
 
         pipeline
@@ -459,7 +458,7 @@ impl RedisConnectionPool {
     where
         V: Serialize + Debug + Send + Sync + Clone,
     {
-        let serialized_value: Vec<(String, RedisValue)> = values
+        let serialized_value: Vec<(String, types::Value)> = values
             .into_iter()
             .map(|(field, value)| {
                 serde_json::to_string(&value)
@@ -470,9 +469,9 @@ impl RedisConnectionPool {
 
         let pipeline = self.writer_pool.next().pipeline();
         let _ = pipeline
-            .hset::<(), &str, Vec<(String, RedisValue)>>(key, serialized_value)
+            .hset::<(), &str, Vec<(String, types::Value)>>(key, serialized_value)
             .await;
-        let _ = pipeline.expire::<(), &str>(key, expiry).await;
+        let _ = pipeline.expire::<(), &str>(key, expiry,None).await;
 
         pipeline
             .all()
@@ -490,7 +489,7 @@ impl RedisConnectionPool {
     where
         V: Serialize + Debug + Send + Sync + Clone,
     {
-        let serialized_value: Vec<(String, RedisValue)> = values
+        let serialized_value: Vec<(String, types::Value)> = values
             .into_iter()
             .map(|(field, value)| {
                 serde_json::to_string(&value)
@@ -506,7 +505,7 @@ impl RedisConnectionPool {
 
         let pipeline = self.writer_pool.next().pipeline();
         let _ = pipeline
-            .hset::<(), &str, Vec<(String, RedisValue)>>(key, serialized_value)
+            .hset::<(), &str, Vec<(String, types::Value)>>(key, serialized_value)
             .await;
 
         // Will work only on Redis Version Upgrade >= 7.4.0
@@ -529,7 +528,7 @@ impl RedisConnectionPool {
     where
         V: Serialize + Debug + Send + Sync + Clone,
     {
-        let serialized_value: Vec<(String, RedisValue)> = values
+        let serialized_value: Vec<(String, types::Value)> = values
             .into_iter()
             .map(|(field, value)| {
                 serde_json::to_string(&value)
@@ -539,7 +538,7 @@ impl RedisConnectionPool {
             .collect::<Result<_, _>>()?;
 
         self.writer_pool
-            .hset::<(), &str, Vec<(String, RedisValue)>>(key, serialized_value)
+            .hset::<(), &str, Vec<(String, types::Value)>>(key, serialized_value)
             .await
             .map_err(|err| RedisError::SetHashFieldFailed(err.to_string()))
     }
@@ -576,20 +575,20 @@ impl RedisConnectionPool {
     where
         T: DeserializeOwned,
     {
-        let value: RedisValue = self
+        let value: types::Value = self
             .reader_pool
             .hget(key, field)
             .await
             .map_err(|err| RedisError::GetHashFieldFailed(err.to_string()))?;
 
         match value {
-            RedisValue::String(value) => Ok(Some(
+            types::Value::String(value) => Ok(Some(
                 serde_json::from_str::<T>(&value.to_string())
                     .map_err(|err| RedisError::DeserializationError(err.to_string()))?,
             )),
-            RedisValue::Null => Ok(None),
+            types::Value::Null => Ok(None),
             _ => Err(RedisError::GetHashFieldFailed(format!(
-                "Unexpected RedisValue encountered: {:?}",
+                "Unexpected types::Value encountered: {:?}",
                 value
             ))),
         }
@@ -600,25 +599,25 @@ impl RedisConnectionPool {
     where
         T: DeserializeOwned,
     {
-        let output: RedisValue = self
+        let output: types::Value = self
             .reader_pool
             .hgetall(key)
             .await
             .map_err(|err| RedisError::GetAllHashFieldFailed(err.to_string()))?;
 
         match output {
-            RedisValue::Map(redis_map) => {
+            types::Value::Map(redis_map) => {
                 let result = redis_map
                     .iter()
                     .map(|(key, value)| {
-                        if let (Some(key), RedisValue::String(value)) = (key.as_str(), value) {
+                        if let (Some(key), types::Value::String(value)) = (key.as_str(), value) {
                             let key = key.to_string();
                             let value = serde_json::from_str::<T>(&value.to_string())
                                 .map_err(|err| RedisError::DeserializationError(err.to_string()))?;
                             Ok((key, value))
                         } else {
                             Err(RedisError::GetHashFieldFailed(format!(
-                                "Unexpected RedisValue encountered"
+                                "Unexpected types::Value encountered"
                             )))
                         }
                     })
@@ -627,7 +626,7 @@ impl RedisConnectionPool {
                 Ok(result)
             }
             case => Err(RedisError::GetHashFieldFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
+                "Unexpected types::Value encountered : {:?}",
                 case
             ))),
         }
@@ -640,7 +639,7 @@ impl RedisConnectionPool {
     /// If the vector of values is empty, it will return the current length of the list without modifying it.
     ///
     /// # Type Parameters
-    /// - `V` - The type of the values to be appended to the list. Must be convertible into a `RedisValue` and implements `Debug`, `Send`, `Sync`, and `Clone`.
+    /// - `V` - The type of the values to be appended to the list. Must be convertible into a `types::Value` and implements `Debug`, `Send`, `Sync`, and `Clone`.
     ///
     /// # Parameters
     /// - `key: &str` - The key representing the list in the Redis store.
@@ -675,7 +674,7 @@ impl RedisConnectionPool {
                     .map(Into::into)
                     .map_err(|err| RedisError::SerializationError(err.to_string()))
             })
-            .collect::<Result<Vec<RedisValue>, RedisError>>()?;
+            .collect::<Result<Vec<types::Value>, RedisError>>()?;
 
         let output = self
             .writer_pool
@@ -684,9 +683,9 @@ impl RedisConnectionPool {
             .map_err(|err| RedisError::RPushFailed(err.to_string()))?;
 
         match output {
-            RedisValue::Integer(length) => Ok(length),
+            types::Value::Integer(length) => Ok(length),
             case => Err(RedisError::RPushFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
+                "Unexpected types::Value encountered : {:?}",
                 case
             ))),
         }
@@ -699,7 +698,7 @@ impl RedisConnectionPool {
     /// The function returns the length of the list after the push operation.
     ///
     /// # Type Parameters
-    /// - `V` - The type of the values to be appended to the list. Must be convertible into a `RedisValue` and implements `Debug`, `Send`, `Sync`, and `Clone`.
+    /// - `V` - The type of the values to be appended to the list. Must be convertible into a `types::Value` and implements `Debug`, `Send`, `Sync`, and `Clone`.
     ///
     /// # Parameters
     /// - `key: &str` - The key representing the list in the Redis store.
@@ -743,22 +742,22 @@ impl RedisConnectionPool {
                     .map(Into::into)
                     .map_err(|err| RedisError::SerializationError(err.to_string()))
             })
-            .collect::<Result<Vec<RedisValue>, RedisError>>()?;
+            .collect::<Result<Vec<types::Value>, RedisError>>()?;
 
         let _ = pipeline
-            .rpush::<RedisValue, &str, Vec<RedisValue>>(key, serialized_value)
+            .rpush::<types::Value, &str, Vec<types::Value>>(key, serialized_value)
             .await;
-        let _ = pipeline.expire::<(), &str>(key, expiry.into()).await;
+        let _ = pipeline.expire::<(), &str>(key, expiry.into(), None).await;
 
-        let output: Vec<RedisValue> = pipeline
+        let output: Vec<types::Value> = pipeline
             .all()
             .await
             .map_err(|err| RedisError::RPushFailed(err.to_string()))?;
 
         match output.deref() {
-            [RedisValue::Integer(length), ..] => Ok(length.to_owned()),
+            [types::Value::Integer(length), ..] => Ok(length.to_owned()),
             case => Err(RedisError::RPushFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
+                "Unexpected types::Value encountered : {:?}",
                 case
             ))),
         }
@@ -798,25 +797,25 @@ impl RedisConnectionPool {
             .map_err(|err| RedisError::RPopFailed(err.to_string()))?;
 
         match output {
-            RedisValue::Array(val) => {
+            types::Value::Array(val) => {
                 let results = val
                     .into_iter()
                     .map(|v| match v {
-                        RedisValue::String(s) => serde_json::from_str::<T>(&s)
+                        types::Value::String(s) => serde_json::from_str::<T>(&s)
                             .map_err(|err| RedisError::DeserializationError(err.to_string())),
                         case => Err(RedisError::RPopFailed(format!(
-                            "Unexpected RedisValue encountered : {:?}",
+                            "Unexpected types::Value encountered : {:?}",
                             case
                         ))),
                     })
                     .collect::<Result<Vec<T>, RedisError>>()?;
                 Ok(results)
             }
-            RedisValue::String(val) => serde_json::from_str::<T>(&val)
+            types::Value::String(val) => serde_json::from_str::<T>(&val)
                 .map(|val| vec![val])
                 .map_err(|err| RedisError::DeserializationError(err.to_string())),
             case => Err(RedisError::RPopFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
+                "Unexpected types::Value encountered : {:?}",
                 case
             ))),
         }
@@ -861,26 +860,26 @@ impl RedisConnectionPool {
             .map_err(|err| RedisError::LPopFailed(err.to_string()))?;
 
         match output {
-            RedisValue::Array(val) => {
+            types::Value::Array(val) => {
                 let results = val
                     .into_iter()
                     .map(|v| match v {
-                        RedisValue::String(s) => serde_json::from_str::<T>(&s)
+                        types::Value::String(s) => serde_json::from_str::<T>(&s)
                             .map_err(|err| RedisError::DeserializationError(err.to_string())),
                         case => Err(RedisError::LPopFailed(format!(
-                            "Unexpected RedisValue encountered : {:?}",
+                            "Unexpected types::Value encountered : {:?}",
                             case
                         ))),
                     })
                     .collect::<Result<Vec<T>, RedisError>>()?;
                 Ok(results)
             }
-            RedisValue::String(val) => serde_json::from_str::<T>(&val)
+            types::Value::String(val) => serde_json::from_str::<T>(&val)
                 .map(|val| vec![val])
                 .map_err(|err| RedisError::DeserializationError(err.to_string())),
-            RedisValue::Null => Ok(vec![]),
+            types::Value::Null => Ok(vec![]),
             case => Err(RedisError::LPopFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
+                "Unexpected types::Value encountered : {:?}",
                 case
             ))),
         }
@@ -926,26 +925,26 @@ impl RedisConnectionPool {
             .map_err(|err| RedisError::LRangeFailed(err.to_string()))?;
 
         match output {
-            RedisValue::Array(val) => {
+            types::Value::Array(val) => {
                 let results = val
                     .into_iter()
                     .map(|v| match v {
-                        RedisValue::String(s) => serde_json::from_str::<T>(&s)
+                        types::Value::String(s) => serde_json::from_str::<T>(&s)
                             .map_err(|err| RedisError::DeserializationError(err.to_string())),
                         case => Err(RedisError::LRangeFailed(format!(
-                            "Unexpected RedisValue encountered : {:?}",
+                            "Unexpected types::Value encountered : {:?}",
                             case
                         ))),
                     })
                     .collect::<Result<Vec<T>, RedisError>>()?;
                 Ok(results)
             }
-            RedisValue::String(val) => serde_json::from_str::<T>(&val)
+            types::Value::String(val) => serde_json::from_str::<T>(&val)
                 .map(|val| vec![val])
                 .map_err(|err| RedisError::DeserializationError(err.to_string())),
-            RedisValue::Null => Ok(vec![]),
+            types::Value::Null => Ok(vec![]),
             case => Err(RedisError::LRangeFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
+                "Unexpected types::Value encountered : {:?}",
                 case
             ))),
         }
@@ -984,9 +983,9 @@ impl RedisConnectionPool {
             .map_err(|err| RedisError::LLenFailed(err.to_string()))?;
 
         match output {
-            RedisValue::Integer(length) => Ok(length),
+            types::Value::Integer(length) => Ok(length),
             case => Err(RedisError::LLenFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
+                "Unexpected types::Value encountered : {:?}",
                 case
             ))),
         }
@@ -998,7 +997,7 @@ impl RedisConnectionPool {
     ///
     /// * `key` - A string slice that holds the name of the key to which geospatial items are added.
     /// * `values` - The geospatial items to add. This is a generic type that can be converted into
-    ///              `MultipleGeoValues`, which represent multiple geospatial items.
+    ///              `types::geo::MultipleGeoValues`, which represent multiple geospatial items.
     /// * `options` - Optional `SetOptions` to specify additional command options like `NX` or `XX`.
     /// * `changed` - A boolean indicating whether to return the number of elements that were
     ///               actually added to the set, not including all the elements already there.
@@ -1032,12 +1031,12 @@ impl RedisConnectionPool {
     pub async fn geo_add(
         &self,
         key: &str,
-        values: Vec<GeoValue>,
+        values: Vec<types::geo::GeoValue>,
         options: Option<SetOptions>,
         changed: bool,
     ) -> Result<(), RedisError> {
         self.writer_pool
-            .geoadd(key, options, changed, MultipleGeoValues::from(values))
+            .geoadd(key, options, changed, types::geo::MultipleGeoValues::from(values))
             .await
             .map_err(|err| RedisError::GeoAddFailed(err.to_string()))
     }
@@ -1051,7 +1050,7 @@ impl RedisConnectionPool {
     ///
     /// * `key` - A string slice that holds the name of the key to which geospatial items are added.
     /// * `values` - The geospatial items to add. This is a generic type that can be converted into
-    ///              `MultipleGeoValues`, which represent multiple geospatial items.
+    ///              `types::geo::MultipleGeoValues`, which represent multiple geospatial items.
     /// * `options` - Optional `SetOptions` to specify additional command options like `NX` or `XX`.
     /// * `changed` - A boolean indicating whether to return the number of elements that were
     ///               actually added to the set, not including all the elements already there.
@@ -1066,7 +1065,7 @@ impl RedisConnectionPool {
     pub async fn geo_add_with_expiry<V>(
         &self,
         key: &str,
-        values: Vec<GeoValue>,
+        values: Vec<types::geo::GeoValue>,
         options: Option<SetOptions>,
         changed: bool,
         expiry: u64,
@@ -1074,14 +1073,14 @@ impl RedisConnectionPool {
         let pipeline = self.writer_pool.next().pipeline();
 
         let _ = pipeline
-            .geoadd::<RedisValue, &str, MultipleGeoValues>(
+            .geoadd::<types::Value, &str, types::geo::MultipleGeoValues>(
                 key,
                 options,
                 changed,
-                MultipleGeoValues::from(values),
+                types::geo::MultipleGeoValues::from(values),
             )
             .await;
-        let _ = pipeline.expire::<(), &str>(key, expiry as i64).await;
+        let _ = pipeline.expire::<(), &str>(key, expiry as i64, None).await;
 
         pipeline
             .all()
@@ -1125,7 +1124,7 @@ impl RedisConnectionPool {
     #[macros::measure_duration]
     pub async fn mgeo_add_with_expiry(
         &self,
-        mval: &FxHashMap<String, Vec<GeoValue>>,
+        mval: &FxHashMap<String, Vec<types::geo::GeoValue>>,
         options: Option<SetOptions>,
         changed: bool,
         expiry: i64,
@@ -1134,14 +1133,14 @@ impl RedisConnectionPool {
 
         for (key, values) in mval.iter() {
             let _ = pipeline
-                .geoadd::<RedisValue, &str, MultipleGeoValues>(
+                .geoadd::<types::Value, &str, types::geo::MultipleGeoValues>(
                     key,
                     options.to_owned(),
                     changed,
-                    MultipleGeoValues::from(values.to_owned()),
+                    types::geo::MultipleGeoValues::from(values.to_owned()),
                 )
                 .await;
-            let _ = pipeline.expire::<(), &str>(key, expiry).await;
+            let _ = pipeline.expire::<(), &str>(key, expiry, None).await;
         }
 
         pipeline
@@ -1159,7 +1158,7 @@ impl RedisConnectionPool {
     /// # Arguments
     ///
     /// * `key` - The key of the geospatial index to search.
-    /// * `from_member` - An optional `RedisValue` representing the member from which to start the search.
+    /// * `from_member` - An optional `types::Value` representing the member from which to start the search.
     /// * `from_lonlat` - An optional `GeoPosition` (longitude and latitude) representing the point from which
     ///                   to start the search.
     /// * `by_radius` - An optional tuple specifying the radius and unit (meters, kilometers, miles, feet) for radius searches.
@@ -1190,12 +1189,12 @@ impl RedisConnectionPool {
     pub async fn geo_search(
         &self,
         key: &str,
-        from_lonlat: GeoPosition,
-        by_radius: (f64, GeoUnit),
+        from_lonlat: types::geo::GeoPosition,
+        by_radius: (f64, types::geo::GeoUnit),
         ord: SortOrder,
     ) -> Result<Vec<(String, Point)>, RedisError> {
         self.reader_pool
-            .geosearch::<Vec<Vec<RedisValue>>, &str>(
+            .geosearch::<Vec<Vec<types::Value>>, &str>(
                 key,
                 None,
                 Some(from_lonlat.to_owned()),
@@ -1211,8 +1210,8 @@ impl RedisConnectionPool {
             .map_err(|err| RedisError::GeoSearchFailed(err.to_string()))?
             .into_iter()
             .map(|geoval| {
-                if let [RedisValue::String(member), RedisValue::Array(position)] = &geoval[..] {
-                    if let [RedisValue::Double(longitude), RedisValue::Double(latitude)] =
+                if let [types::Value::String(member), types::Value::Array(position)] = &geoval[..] {
+                    if let [types::Value::Double(longitude), types::Value::Double(latitude)] =
                         position[..]
                     {
                         Ok((
@@ -1224,12 +1223,12 @@ impl RedisConnectionPool {
                         ))
                     } else {
                         Err(RedisError::GeoSearchFailed(
-                            "Unexpected RedisValue encountered".to_string(),
+                            "Unexpected types::Value encountered".to_string(),
                         ))
                     }
                 } else {
                     Err(RedisError::GeoSearchFailed(
-                        "Unexpected RedisValue encountered".to_string(),
+                        "Unexpected types::Value encountered".to_string(),
                     ))
                 }
             })
@@ -1258,15 +1257,15 @@ impl RedisConnectionPool {
     pub async fn mgeo_search(
         &self,
         keys: Vec<String>,
-        from_lonlat: GeoPosition,
-        by_radius: (f64, GeoUnit),
+        from_lonlat: types::geo::GeoPosition,
+        by_radius: (f64, types::geo::GeoUnit),
         ord: SortOrder,
     ) -> Result<Vec<(String, Point)>, RedisError> {
         let pipeline = self.reader_pool.next().pipeline();
 
         for key in keys {
             let _ = pipeline
-                .geosearch::<Vec<RedisValue>, String>(
+                .geosearch::<Vec<types::Value>, String>(
                     key,
                     None,
                     Some(from_lonlat.to_owned()),
@@ -1282,7 +1281,7 @@ impl RedisConnectionPool {
         }
 
         let geovals = pipeline
-            .all::<Vec<Vec<RedisValue>>>()
+            .all::<Vec<Vec<types::Value>>>()
             .await
             .map_err(|err| RedisError::GeoSearchFailed(err.to_string()))?;
 
@@ -1290,11 +1289,11 @@ impl RedisConnectionPool {
             .into_iter()
             .flat_map(|geoval| {
                 geoval.into_iter().map(|item| {
-                    if let RedisValue::Array(geoval) = item {
-                        if let [RedisValue::String(member), RedisValue::Array(position)] =
+                    if let types::Value::Array(geoval) = item {
+                        if let [types::Value::String(member), types::Value::Array(position)] =
                             &geoval[..]
                         {
-                            if let [RedisValue::Double(longitude), RedisValue::Double(latitude)] =
+                            if let [types::Value::Double(longitude), types::Value::Double(latitude)] =
                                 position[..]
                             {
                                 Ok((
@@ -1306,17 +1305,17 @@ impl RedisConnectionPool {
                                 ))
                             } else {
                                 Err(RedisError::GeoSearchFailed(
-                                    "Unexpected RedisValue encountered".to_string(),
+                                    "Unexpected types::Value encountered".to_string(),
                                 ))
                             }
                         } else {
                             Err(RedisError::GeoSearchFailed(
-                                "Unexpected RedisValue encountered".to_string(),
+                                "Unexpected types::Value encountered".to_string(),
                             ))
                         }
                     } else {
                         Err(RedisError::GeoSearchFailed(
-                            "Unexpected RedisValue encountered".to_string(),
+                            "Unexpected types::Value encountered".to_string(),
                         ))
                     }
                 })
@@ -1335,7 +1334,7 @@ impl RedisConnectionPool {
     //         .map_err(|err| RedisError::GeoPosFailed(err.to_string()))?;
 
     //     match output {
-    //         RedisValue::Array(points) => {
+    //         types::Value::Array(points) => {
     //             if !points.is_empty() {
     //                 if points[0].is_array() {
     //                     let mut resp = Vec::new();
@@ -1362,7 +1361,7 @@ impl RedisConnectionPool {
     //             }
     //         }
     //         case => Err(RedisError::GeoPosFailed(format!(
-    //             "Unexpected RedisValue encountered : {:?}",
+    //             "Unexpected types::Value encountered : {:?}",
     //             case
     //         ))),
     //     }
@@ -1524,25 +1523,25 @@ impl RedisConnectionPool {
             .map_err(|err| RedisError::ZRangeFailed(err.to_string()))?;
 
         match output {
-            RedisValue::Array(val) => {
+            types::Value::Array(val) => {
                 let results = val
                     .into_iter()
                     .map(|v| match v {
-                        RedisValue::String(s) => serde_json::from_str::<T>(&s)
+                        types::Value::String(s) => serde_json::from_str::<T>(&s)
                             .map_err(|err| RedisError::DeserializationError(err.to_string())),
                         case => Err(RedisError::ZRangeFailed(format!(
-                            "Unexpected RedisValue encountered : {:?}",
+                            "Unexpected types::Value encountered : {:?}",
                             case
                         ))),
                     })
                     .collect::<Result<Vec<T>, RedisError>>()?;
                 Ok(results)
             }
-            RedisValue::String(val) => serde_json::from_str::<T>(&val)
+            types::Value::String(val) => serde_json::from_str::<T>(&val)
                 .map(|val| vec![val])
                 .map_err(|err| RedisError::DeserializationError(err.to_string())),
             case => Err(RedisError::ZRangeFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
+                "Unexpected types::Value encountered : {:?}",
                 case
             ))),
         }
@@ -1556,20 +1555,20 @@ impl RedisConnectionPool {
         trim_threshold: i64,
     ) -> Result<(), RedisError>
     where
-        F: Into<RedisKey> + Send,
-        V: Into<RedisValue> + Send,
+        F: Into<types::Key> + Send,
+        V: Into<types::Value> + Send,
     {
         self.writer_pool
             .xadd(
                 key,
                 false,
                 (
-                    XCapKind::MaxLen,
-                    XCapTrim::AlmostExact,
+                    types::streams::XCapKind::MaxLen,
+                    types::streams::XCapTrim::AlmostExact,
                     StringOrNumber::Number(trim_threshold),
                     None,
                 ),
-                Auto,
+                types::streams::XID::Auto,
                 fields,
             )
             .await
@@ -1589,7 +1588,7 @@ impl RedisConnectionPool {
         if ids.is_empty() {
             return Ok(result);
         }
-        let output: RedisValue = self
+        let output: types::Value = self
             .reader_pool
             .xread(
                 count,
@@ -1601,28 +1600,28 @@ impl RedisConnectionPool {
             .map_err(|err| RedisError::XReadFailed(err.to_string()))?;
 
         match output {
-            RedisValue::Map(output) => {
+            types::Value::Map(output) => {
                 for (redis_key, value_array) in output.inner() {
-                    if let RedisValue::Array(value_array) = value_array {
+                    if let types::Value::Array(value_array) = value_array {
                         // Convert RedisKey to String key
                         let key = redis_key.into_string().unwrap();
 
                         let mut entries = Vec::new();
 
                         for value in value_array {
-                            if let RedisValue::Array(entry_array) = value {
+                            if let types::Value::Array(entry_array) = value {
                                 // Assuming the first element is a stream ID and the second element is an array of field-value pairs
                                 let mut field_values = Vec::new();
 
                                 // Extract the stream ID, assuming it's the first element in the array.
-                                if let Some(RedisValue::String(id)) = entry_array.get(0) {
+                                if let Some(types::Value::String(id)) = entry_array.get(0) {
                                     field_values.push(("stream_id".to_string(), id.to_string()));
                                 }
 
                                 // Extract the field-value pairs, assuming they start from the second element.
-                                if let Some(RedisValue::Array(fields)) = entry_array.get(1) {
+                                if let Some(types::Value::Array(fields)) = entry_array.get(1) {
                                     for field in fields.chunks(2) {
-                                        if let [RedisValue::String(field_name), RedisValue::String(field_value)] =
+                                        if let [types::Value::String(field_name), types::Value::String(field_value)] =
                                             field
                                         {
                                             field_values.push((
@@ -1643,9 +1642,9 @@ impl RedisConnectionPool {
 
                 Ok(result)
             }
-            RedisValue::Null => Ok(result),
+            types::Value::Null => Ok(result),
             case => Err(RedisError::XReadFailed(format!(
-                "Unexpected RedisValue encountered : {:?}",
+                "Unexpected types::Value encountered : {:?}",
                 case
             ))),
         }
