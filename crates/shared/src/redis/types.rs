@@ -18,10 +18,7 @@ use log::info;
 use super::error::RedisError;
 use serde::{de::DeserializeOwned, Deserialize};
 use tokio::sync::mpsc;
-use tokio::sync::{
-    broadcast::Receiver,
-    mpsc::{UnboundedReceiver, UnboundedSender},
-};
+use tokio::sync::broadcast::Receiver;
 use tracing::error;
 use tracing::*;
 
@@ -286,57 +283,22 @@ impl RedisConnectionPool {
     where
         T: DeserializeOwned + Send + 'static,
     {
-        let (tx, mut rx): (
-            UnboundedSender<(String, T, DateTime<Utc>)>,
-            UnboundedReceiver<(String, T, DateTime<Utc>)>,
-        ) = mpsc::unbounded_channel();
-
-        let redis_connection = self.reader_pool.next();
-        redis_connection.subscribe(channel).await.map_err(|e| {
-            RedisError::GetFailed(format!(
-                "Failed to subscribe to channel '{}': {}",
-                channel, e
-            ))
-        })?;
-        let mut message_stream: Receiver<Message> = redis_connection.message_rx();
-        tokio::spawn(async move {
-            loop {
-                let res = message_stream.recv().await;
-                match res {
-                    Err(err) => error!(
-                        "Error in receiving message from Redis, err : {}",
-                        err.to_string()
-                    ),
-                    Ok(msg) => {
-                        let channel_name = msg.channel.to_string();
-                        match &msg.value {
-                            RedisValue::String(val) => match serde_json::from_str::<T>(val) {
-                                Ok(parsed) => {
-                                    if let Err(err) = tx.send((channel_name, parsed, Utc::now())) {
-                                        error!("Failed to send message to receiver: {}", err);
-                                    }
-                                }
-                                Err(err) => {
-                                    error!(
-                                        "Deserialization error for channel '{}': {}",
-                                        channel_name, err
-                                    );
-                                }
-                            },
-                            RedisValue::Null => {
-                                error!("Received null value on channel '{}'", channel_name);
-                            }
-                            other => {
-                                error!(
-                                    "Unexpected RedisValue encountered on channel '{}': {:?}",
-                                    channel_name, other
-                                );
-                            }
-                        }
-                    }
+        let (tx, rx) = mpsc::unbounded_channel();
+        let client = self.reader_pool.next().clone();
+        subscribe_and_spawn(client, channel, move |channel_name, val| {
+            match serde_json::from_str::<T>(val) {
+                Ok(parsed) => {
+                    tx.send((channel_name, parsed, Utc::now())).map_err(|err| {
+                        error!("Failed to send message to receiver: {}", err);
+                    })
+                }
+                Err(err) => {
+                    error!("Deserialization error for channel '{}': {}", channel_name, err);
+                    Ok(())
                 }
             }
-        });
+        })
+        .await?;
         Ok(rx)
     }
 
@@ -344,49 +306,106 @@ impl RedisConnectionPool {
         &self,
         channel: &str,
     ) -> Result<mpsc::UnboundedReceiver<(String, String)>, RedisError> {
-        let (tx, mut rx): (
-            UnboundedSender<(String, String)>,
-            UnboundedReceiver<(String, String)>,
-        ) = mpsc::unbounded_channel();
-
-        let redis_connection = self.reader_pool.next();
-        redis_connection.subscribe(channel).await.map_err(|e| {
-            RedisError::GetFailed(format!(
-                "Failed to subscribe to channel '{}': {}",
-                channel, e
-            ))
-        })?;
-        let mut message_stream: Receiver<Message> = redis_connection.message_rx();
-        tokio::spawn(async move {
-            loop {
-                let res = message_stream.recv().await;
-                match res {
-                    Err(err) => error!(
-                        "Error in receiving message from Redis, err : {}",
-                        err.to_string()
-                    ),
-                    Ok(msg) => {
-                        let channel_name = msg.channel.to_string();
-                        match &msg.value {
-                            RedisValue::String(val) => {
-                                if let Err(err) = tx.send((channel_name, val.to_string())) {
-                                    error!("Failed to send message to receiver: {}", err);
-                                }
-                            }
-                            RedisValue::Null => {
-                                error!("Received null value on channel '{}'", channel_name);
-                            }
-                            other => {
-                                error!(
-                                    "Unexpected RedisValue encountered on channel '{}': {:?}",
-                                    channel_name, other
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        });
+        let (tx, rx) = mpsc::unbounded_channel();
+        let client = self.reader_pool.next().clone();
+        subscribe_and_spawn(client, channel, move |channel_name, val| {
+            tx.send((channel_name, val.to_string())).map_err(|err| {
+                error!("Failed to send message to receiver: {}", err);
+            })
+        })
+        .await?;
         Ok(rx)
     }
+}
+
+async fn resubscribe_after_reconnect(client: &fred::prelude::RedisClient, channel: &str) {
+    warn!(
+        "Redis reconnect detected; re-subscribing to pubsub channel '{}'",
+        channel
+    );
+    match client.subscribe(channel).await {
+        Ok(_) => info!("Re-subscribed to pubsub channel '{}'", channel),
+        Err(err) => error!(
+            "Failed to re-subscribe to channel '{}' after reconnect: {}",
+            channel, err
+        ),
+    }
+}
+
+fn handle_pubsub_message<F>(msg: Message, on_payload: &mut F) -> Result<(), ()>
+where
+    F: FnMut(String, &str) -> Result<(), ()>,
+{
+    let channel_name = msg.channel.to_string();
+    match &msg.value {
+        RedisValue::String(val) => on_payload(channel_name, val),
+        RedisValue::Null => {
+            error!("Received null value on channel '{}'", channel_name);
+            Ok(())
+        }
+        other => {
+            error!(
+                "Unexpected RedisValue encountered on channel '{}': {:?}",
+                channel_name, other
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn subscribe_and_spawn<F>(
+    client: fred::prelude::RedisClient,
+    channel: &str,
+    mut on_payload: F,
+) -> Result<(), RedisError>
+where
+    F: FnMut(String, &str) -> Result<(), ()> + Send + 'static,
+{
+    client.subscribe(channel).await.map_err(|e| {
+        RedisError::GetFailed(format!(
+            "Failed to subscribe to channel '{}': {}",
+            channel, e
+        ))
+    })?;
+
+    let channel = channel.to_string();
+    let mut message_stream: Receiver<Message> = client.message_rx();
+    let mut reconnect_stream = client.reconnect_rx();
+
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                msg = message_stream.recv() => match msg {
+                    Ok(msg) => {
+                        if handle_pubsub_message(msg, &mut on_payload).is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        error!("Redis pubsub lagged by {} messages on channel '{}'", n, channel);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        error!(
+                            "Redis pubsub broadcast closed for channel '{}'; exiting subscriber task",
+                            channel
+                        );
+                        break;
+                    }
+                },
+                reconnect = reconnect_stream.recv() => match reconnect {
+                    Ok(_) => resubscribe_after_reconnect(&client, &channel).await,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        error!(
+                            "Redis reconnect stream closed for channel '{}'; exiting subscriber task",
+                            channel
+                        );
+                        break;
+                    }
+                },
+            }
+        }
+    });
+
+    Ok(())
 }
