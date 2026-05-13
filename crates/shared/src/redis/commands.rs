@@ -1671,6 +1671,31 @@ impl RedisConnectionPool {
     }
 
     #[macros::measure_duration]
+    pub async fn xdel_pipelined(
+        &self,
+        items: Vec<(String, Vec<String>)>,
+    ) -> Result<(), RedisError> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        let pipeline = self.writer_pool.next().pipeline();
+        for (key, ids) in &items {
+            if ids.is_empty() {
+                continue;
+            }
+            let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+            let _ = pipeline
+                .xdel::<RedisValue, &str, Vec<&str>>(key.as_str(), id_refs)
+                .await;
+        }
+        pipeline
+            .all::<RedisValue>()
+            .await
+            .map_err(|err| RedisError::XDeleteFailed(err.to_string()))?;
+        Ok(())
+    }
+
+    #[macros::measure_duration]
     pub async fn hdel(&self, key: &str, field: &str) -> Result<(), RedisError> {
         self.writer_pool
             .hdel(key, field)
