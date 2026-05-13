@@ -1660,6 +1660,17 @@ impl RedisConnectionPool {
     }
 
     #[macros::measure_duration]
+    pub async fn xdel_multi(&self, key: &str, ids: Vec<&str>) -> Result<(), RedisError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        self.writer_pool
+            .xdel(key, ids)
+            .await
+            .map_err(|err| RedisError::XDeleteFailed(err.to_string()))
+    }
+
+    #[macros::measure_duration]
     pub async fn hdel(&self, key: &str, field: &str) -> Result<(), RedisError> {
         self.writer_pool
             .hdel(key, field)
