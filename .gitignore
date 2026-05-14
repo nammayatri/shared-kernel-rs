@@ -5,6 +5,7 @@
 /profiling
 data
 logs
+.claude/
 
 # Nix
 /.direnv

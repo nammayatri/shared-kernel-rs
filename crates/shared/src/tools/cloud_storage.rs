@@ -26,7 +26,10 @@ impl FromStr for CloudProvider {
         match s.to_uppercase().as_str() {
             "AWS" | "S3" => Ok(CloudProvider::AWS),
             "GCS" | "GCP" | "GOOGLE" => Ok(CloudProvider::GCS),
-            _ => Err(format!("Invalid cloud provider: '{}'. Supported values: aws, s3, gcs, gcp, google", s)),
+            _ => Err(format!(
+                "Invalid cloud provider: '{}'. Supported values: aws, s3, gcs, gcp, google",
+                s
+            )),
         }
     }
 }
@@ -176,12 +179,10 @@ pub async fn get_files_in_directory_from_str(
     bucket: &str,
     prefix: &str,
 ) -> Result<HashMap<String, Vec<u8>>, CloudStorageError> {
-    let provider = provider_str
-        .parse::<CloudProvider>()
-        .map_err(|e| {
-            error_stack::Report::new(CloudStorageError::InvalidProvider(provider_str.to_string()))
-                .attach_printable(e)
-        })?;
+    let provider = provider_str.parse::<CloudProvider>().map_err(|e| {
+        error_stack::Report::new(CloudStorageError::InvalidProvider(provider_str.to_string()))
+            .attach_printable(e)
+    })?;
 
     get_files_in_directory(provider, bucket, prefix).await
 }

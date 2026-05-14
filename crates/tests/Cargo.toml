@@ -7,3 +7,12 @@ edition = "2021"
 macros = { version = "0.1.0", path = "../macros" }
 shared = { version = "0.1.0", path = "../shared" }
 tokio = { version = "1.28.2", features = ["full"] }
+
+[dev-dependencies]
+diesel = { version = "2.2", default-features = false, features = ["postgres"] }
+diesel-async = { version = "0.5", features = ["postgres", "bb8"] }
+secrecy = "0.10"
+serde = { version = "1", features = ["derive"] }
+tempfile = "3"
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["postgres", "redis"] }

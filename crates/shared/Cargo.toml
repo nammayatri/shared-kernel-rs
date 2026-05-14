@@ -37,3 +37,10 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 macros = { version = "0.1.0", path = "../macros" }
 aws-config = "1.6.1"
 google-cloud-storage = "0.15"
+secrecy = { version = "0.10", features = ["serde"] }
+diesel = { version = "2.2", default-features = false, features = ["postgres", "chrono", "serde_json", "uuid"] }
+diesel-async = { version = "0.5", features = ["postgres", "bb8"] }
+bb8 = "0.8"
+
+[dev-dependencies]
+toml = "0.8"
