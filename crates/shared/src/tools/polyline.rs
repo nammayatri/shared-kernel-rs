@@ -10,15 +10,19 @@
 //!
 //! Buckets polyline points by precision-7 geohash (~153m cells). `find_nearest_point`
 //! checks the center cell plus its 8 neighbors before falling back to a linear scan.
+//! `distance_to_polyline` returns the perpendicular distance to the nearest segment
+//! (not just the nearest vertex) — needed for routes with sparse polyline vertices
+//! where a bus can be far from any vertex but near a segment.
 //! `distance_between` uses a precomputed cumulative-distance array.
 //!
 //! Extracted from eta-compute so multiple Rust services (gps-processor, future workers)
 //! can share one implementation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const EARTH_RADIUS_M: f64 = 6_371_000.0;
 const GEOHASH_PRECISION: usize = 7;
+const METERS_PER_DEGREE_LAT: f64 = 111_320.0;
 
 /// Haversine distance between two (lat, lng) points in meters.
 pub fn haversine_meters(from: (f64, f64), to: (f64, f64)) -> f64 {
@@ -31,6 +35,39 @@ pub fn haversine_meters(from: (f64, f64), to: (f64, f64)) -> f64 {
     let a = (dlat / 2.0).sin().powi(2) + lat1_r.cos() * lat2_r.cos() * (dlng / 2.0).sin().powi(2);
     let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
     EARTH_RADIUS_M * c
+}
+
+/// Perpendicular distance in meters from a (lat, lng) point to the line segment
+/// `seg_start` → `seg_end`. Uses a local equirectangular projection centered at the
+/// query point's latitude; accurate to a small fraction of a percent for segments
+/// under ~1 km, which is the typical scale for bus-route polylines.
+pub fn distance_point_to_segment(
+    point: (f64, f64),
+    seg_start: (f64, f64),
+    seg_end: (f64, f64),
+) -> f64 {
+    let (lat, lng) = point;
+    let lng_to_m = METERS_PER_DEGREE_LAT * lat.to_radians().cos();
+
+    let ax = (seg_start.1 - lng) * lng_to_m;
+    let ay = (seg_start.0 - lat) * METERS_PER_DEGREE_LAT;
+    let bx = (seg_end.1 - lng) * lng_to_m;
+    let by = (seg_end.0 - lat) * METERS_PER_DEGREE_LAT;
+
+    let abx = bx - ax;
+    let aby = by - ay;
+    let ab_sq = abx * abx + aby * aby;
+
+    if ab_sq < 1e-9 {
+        return (ax * ax + ay * ay).sqrt(); // degenerate segment
+    }
+
+    let t = ((-ax) * abx + (-ay) * aby) / ab_sq;
+    let t_clamped = t.clamp(0.0, 1.0);
+
+    let cx = ax + t_clamped * abx;
+    let cy = ay + t_clamped * aby;
+    (cx * cx + cy * cy).sqrt()
 }
 
 /// Spatial index over a polyline.
@@ -137,5 +174,75 @@ impl PolylineIndex {
         let (from_idx, _) = self.find_nearest_point(from.0, from.1)?;
         let (to_idx, _) = self.find_nearest_point(to.0, to.1)?;
         Some((self.cumulative_distances[to_idx] - self.cumulative_distances[from_idx]).abs())
+    }
+
+    /// Minimum perpendicular distance in meters from (lat, lng) to any segment of the
+    /// polyline. For polylines with sparse vertices this is strictly less than the
+    /// nearest-vertex distance returned by `find_nearest_point` and is what adherence
+    /// checks should use. Returns None if the index is empty.
+    pub fn distance_to_polyline(&self, lat: f64, lng: f64) -> Option<f64> {
+        if self.points.is_empty() {
+            return None;
+        }
+        if self.points.len() == 1 {
+            return Some(haversine_meters((lat, lng), self.points[0]));
+        }
+
+        let gh = match geohash::encode(geohash::Coord { x: lng, y: lat }, GEOHASH_PRECISION) {
+            Ok(g) => g,
+            Err(_) => return Some(self.distance_to_polyline_linear(lat, lng)),
+        };
+
+        // Collect candidate segment indices. A vertex at index v contributes up to two
+        // segments: (v-1, v) and (v, v+1).
+        let mut candidate_segments: HashSet<usize> = HashSet::new();
+        let add_neighborhood = |bucket: &Vec<usize>, set: &mut HashSet<usize>| {
+            for &v in bucket {
+                if v > 0 {
+                    set.insert(v - 1);
+                }
+                if v + 1 < self.points.len() {
+                    set.insert(v);
+                }
+            }
+        };
+        if let Some(bucket) = self.geohash_buckets.get(&gh) {
+            add_neighborhood(bucket, &mut candidate_segments);
+        }
+        if let Ok(n) = geohash::neighbors(&gh) {
+            for neighbor_gh in [&n.n, &n.ne, &n.e, &n.se, &n.s, &n.sw, &n.w, &n.nw] {
+                if let Some(bucket) = self.geohash_buckets.get(neighbor_gh) {
+                    add_neighborhood(bucket, &mut candidate_segments);
+                }
+            }
+        }
+
+        if candidate_segments.is_empty() {
+            return Some(self.distance_to_polyline_linear(lat, lng));
+        }
+
+        let mut min_dist = f64::MAX;
+        for seg_idx in candidate_segments {
+            let d = distance_point_to_segment(
+                (lat, lng),
+                self.points[seg_idx],
+                self.points[seg_idx + 1],
+            );
+            if d < min_dist {
+                min_dist = d;
+            }
+        }
+        Some(min_dist)
+    }
+
+    fn distance_to_polyline_linear(&self, lat: f64, lng: f64) -> f64 {
+        let mut min_dist = f64::MAX;
+        for i in 0..self.points.len().saturating_sub(1) {
+            let d = distance_point_to_segment((lat, lng), self.points[i], self.points[i + 1]);
+            if d < min_dist {
+                min_dist = d;
+            }
+        }
+        min_dist
     }
 }

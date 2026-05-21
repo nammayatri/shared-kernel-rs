@@ -340,3 +340,90 @@ fn polyline_distance_between_symmetric() {
     let b = idx.distance_between((13.02, 80.00), (13.00, 80.00)).unwrap();
     assert!((a - b).abs() < 0.001);
 }
+
+#[test]
+fn polyline_distance_to_polyline_on_long_segment() {
+    use shared::tools::polyline::PolylineIndex;
+    // Two vertices ~540m apart (lng diff 0.005 deg at lat 13).
+    let pts = vec![(13.0827, 80.2707), (13.0827, 80.2757)];
+    let idx = PolylineIndex::build(&pts);
+    // Bus exactly at the midpoint of the segment — on the line.
+    let d_poly = idx.distance_to_polyline(13.0827, 80.2732).unwrap();
+    let (_, d_vert) = idx.find_nearest_point(13.0827, 80.2732).unwrap();
+    assert!(d_poly < 2.0, "segment distance ~0 expected, got {d_poly}");
+    assert!(
+        d_vert > 200.0 && d_vert < 300.0,
+        "vertex distance ~270m expected, got {d_vert}"
+    );
+    assert!(d_poly < d_vert, "segment distance must be <= vertex distance");
+}
+
+#[test]
+fn polyline_distance_to_polyline_near_vertex() {
+    use shared::tools::polyline::PolylineIndex;
+    let pts = vec![(13.0827, 80.2707), (13.0827, 80.2757)];
+    let idx = PolylineIndex::build(&pts);
+    // Bus ~33m north of the first vertex — segment perpendicular falls before the
+    // segment start, so clamped distance equals haversine to the vertex.
+    let d_poly = idx.distance_to_polyline(13.0830, 80.2707).unwrap();
+    let (_, d_vert) = idx.find_nearest_point(13.0830, 80.2707).unwrap();
+    assert!(
+        (d_poly - d_vert).abs() < 2.0,
+        "near a vertex, segment and vertex distances should agree (poly={d_poly}, vert={d_vert})"
+    );
+}
+
+#[test]
+fn polyline_distance_to_polyline_far_away() {
+    use shared::tools::polyline::PolylineIndex;
+    let pts = vec![(13.0827, 80.2707), (13.0827, 80.2757)];
+    let idx = PolylineIndex::build(&pts);
+    // Bus ~110km south of the polyline.
+    let d_poly = idx.distance_to_polyline(12.0827, 80.2707).unwrap();
+    let (_, d_vert) = idx.find_nearest_point(12.0827, 80.2707).unwrap();
+    assert!(d_poly > 100_000.0, "expected ~110km, got {d_poly}");
+    assert!(
+        (d_poly - d_vert).abs() < 1000.0,
+        "far from polyline, both methods should agree closely"
+    );
+}
+
+#[test]
+fn polyline_distance_to_polyline_l_shape() {
+    use shared::tools::polyline::{haversine_meters, PolylineIndex};
+    // L-shape: south-to-east, then east-to-north at the corner.
+    let pts = vec![
+        (13.0820, 80.2707),
+        (13.0820, 80.2757), // corner
+        (13.0830, 80.2757),
+    ];
+    let idx = PolylineIndex::build(&pts);
+    // Bus east of the corner — closest point on either segment is the corner vertex.
+    let bus = (13.0820, 80.2780);
+    let d_poly = idx.distance_to_polyline(bus.0, bus.1).unwrap();
+    let d_to_corner = haversine_meters(bus, (13.0820, 80.2757));
+    assert!(
+        (d_poly - d_to_corner).abs() < 5.0,
+        "expected ~haversine-to-corner ({d_to_corner}), got {d_poly}"
+    );
+}
+
+#[test]
+fn polyline_distance_to_polyline_single_point() {
+    use shared::tools::polyline::{haversine_meters, PolylineIndex};
+    let pts = vec![(13.0827, 80.2707)];
+    let idx = PolylineIndex::build(&pts);
+    let d_poly = idx.distance_to_polyline(13.0830, 80.2707).unwrap();
+    let d_haversine = haversine_meters((13.0830, 80.2707), (13.0827, 80.2707));
+    assert!(
+        (d_poly - d_haversine).abs() < 0.01,
+        "single-point polyline should return haversine ({d_haversine}), got {d_poly}"
+    );
+}
+
+#[test]
+fn polyline_distance_to_polyline_empty() {
+    use shared::tools::polyline::PolylineIndex;
+    let idx = PolylineIndex::build(&[]);
+    assert_eq!(idx.distance_to_polyline(13.0827, 80.2707), None);
+}
