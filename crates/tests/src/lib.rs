@@ -269,3 +269,74 @@ async fn test_cloud_storage_wrapper_from_str() {
     assert!(result.is_err(), "Should fail with invalid provider");
     println!("Correctly rejected invalid provider 'invalid'");
 }
+
+// ============================================================================
+// PolylineIndex (shared::tools::polyline)
+// ============================================================================
+
+#[test]
+fn polyline_haversine_known_distance() {
+    use shared::tools::polyline::haversine_meters;
+    // Two points ~447m apart in Chennai
+    let a = (13.03627, 80.24666);
+    let b = (13.03956, 80.24435);
+    let d = haversine_meters(a, b);
+    assert!((400.0..500.0).contains(&d), "expected ~447m, got {d}");
+}
+
+#[test]
+fn polyline_haversine_zero_for_same_point() {
+    use shared::tools::polyline::haversine_meters;
+    let p = (13.0, 80.0);
+    assert_eq!(haversine_meters(p, p), 0.0);
+}
+
+#[test]
+fn polyline_empty_index_returns_none() {
+    use shared::tools::polyline::PolylineIndex;
+    let idx = PolylineIndex::build(&[]);
+    assert!(idx.is_empty());
+    assert!(idx.find_nearest_point(13.0, 80.0).is_none());
+    assert!(idx.distance_between((13.0, 80.0), (13.1, 80.1)).is_none());
+}
+
+#[test]
+fn polyline_nearest_point_on_simple_line() {
+    use shared::tools::polyline::PolylineIndex;
+    let pts = vec![(13.00, 80.00), (13.01, 80.00), (13.02, 80.00), (13.03, 80.00)];
+    let idx = PolylineIndex::build(&pts);
+    let (i, d) = idx.find_nearest_point(13.02, 80.00).unwrap();
+    assert_eq!(i, 2);
+    assert!(d < 1.0, "expected ~0m, got {d}");
+}
+
+#[test]
+fn polyline_nearest_point_off_line() {
+    use shared::tools::polyline::PolylineIndex;
+    let pts = vec![(13.00, 80.00), (13.01, 80.00), (13.02, 80.00)];
+    let idx = PolylineIndex::build(&pts);
+    let (i, d) = idx.find_nearest_point(13.01, 80.001).unwrap();
+    assert_eq!(i, 1);
+    assert!(d > 50.0 && d < 200.0, "expected ~100m off-line, got {d}");
+}
+
+#[test]
+fn polyline_cumulative_distance_monotonic() {
+    use shared::tools::polyline::PolylineIndex;
+    let pts = vec![(13.00, 80.00), (13.01, 80.00), (13.02, 80.00), (13.03, 80.00)];
+    let idx = PolylineIndex::build(&pts);
+    let d_short = idx.distance_between((13.00, 80.00), (13.01, 80.00)).unwrap();
+    let d_long = idx.distance_between((13.00, 80.00), (13.03, 80.00)).unwrap();
+    assert!(d_long > d_short);
+    assert!(d_long > 3000.0 && d_long < 3500.0, "expected ~3.3km, got {d_long}");
+}
+
+#[test]
+fn polyline_distance_between_symmetric() {
+    use shared::tools::polyline::PolylineIndex;
+    let pts = vec![(13.00, 80.00), (13.01, 80.00), (13.02, 80.00)];
+    let idx = PolylineIndex::build(&pts);
+    let a = idx.distance_between((13.00, 80.00), (13.02, 80.00)).unwrap();
+    let b = idx.distance_between((13.02, 80.00), (13.00, 80.00)).unwrap();
+    assert!((a - b).abs() < 0.001);
+}
