@@ -11,5 +11,6 @@ pub mod callapi;
 pub mod cloud_storage;
 pub mod gcs;
 pub mod logger;
+pub mod polyline;
 pub mod prometheus;
 pub mod utils;
