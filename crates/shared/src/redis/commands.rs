@@ -412,7 +412,7 @@ impl RedisConnectionPool {
             let _ = pipeline.del::<RedisValue, &str>(key).await;
         }
 
-        pipeline
+        let _: () = pipeline
             .all()
             .await
             .map_err(|err| RedisError::DeleteFailed(err.to_string()))?;
@@ -1559,7 +1559,8 @@ impl RedisConnectionPool {
         F: Into<RedisKey> + Send,
         V: Into<RedisValue> + Send,
     {
-        self.writer_pool
+        let _: () = self
+            .writer_pool
             .xadd(
                 key,
                 false,
