@@ -6,9 +6,12 @@
     the GNU Affero General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 
+#[cfg(feature = "aws")]
 pub mod aws;
 pub mod callapi;
+#[cfg(all(feature = "aws", feature = "gcp"))]
 pub mod cloud_storage;
+#[cfg(feature = "gcp")]
 pub mod gcs;
 pub mod logger;
 pub mod polyline;
