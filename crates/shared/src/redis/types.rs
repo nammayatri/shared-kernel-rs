@@ -17,10 +17,15 @@ use log::info;
 // use futures::{channel::mpsc::{self, UnboundedReceiver, UnboundedSender}, SinkExt};
 use super::error::RedisError;
 use serde::{de::DeserializeOwned, Deserialize};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::broadcast::Receiver;
 use tracing::error;
 use tracing::*;
+
+// Guards against a hung connection (network partition, wedged server) blocking
+// a caller forever; fred returns a timeout error instead of hanging the task.
+const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Point {
@@ -122,8 +127,16 @@ impl std::ops::Deref for RedisClient {
 impl RedisClient {
     pub async fn new(conf: RedisSettings) -> Result<Self, RedisError> {
         let (redis_config, reconnect_policy) = Self::get_config(&conf).await?;
-        let client =
-            fred::prelude::RedisClient::new(redis_config, None, None, Some(reconnect_policy));
+        let performance_config = fred::types::PerformanceConfig {
+            default_command_timeout: DEFAULT_COMMAND_TIMEOUT,
+            ..Default::default()
+        };
+        let client = fred::prelude::RedisClient::new(
+            redis_config,
+            Some(performance_config),
+            None,
+            Some(reconnect_policy),
+        );
         client.connect();
         client
             .wait_for_connect()
@@ -244,6 +257,7 @@ impl RedisConnectionPool {
 
         let mut performance_config = fred::types::PerformanceConfig::default();
         performance_config.broadcast_channel_capacity = conf.broadcast_channel_capacity;
+        performance_config.default_command_timeout = DEFAULT_COMMAND_TIMEOUT;
 
         let pool = fred::prelude::RedisPool::new(
             config,
