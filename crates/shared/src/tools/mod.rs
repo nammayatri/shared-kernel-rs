@@ -13,6 +13,8 @@ pub mod callapi;
 pub mod cloud_storage;
 #[cfg(feature = "gcp")]
 pub mod gcs;
+#[cfg(feature = "aws")]
+pub mod kms;
 pub mod logger;
 pub mod polyline;
 pub mod prometheus;
