@@ -8,6 +8,7 @@
 
 use crate::incoming_api;
 use crate::tools::prometheus::INCOMING_API;
+use crate::tools::utils::redact_headers;
 use actix_http::StatusCode;
 use actix_web::{Error, HttpRequest};
 use regex::Regex;
@@ -68,7 +69,7 @@ pub fn get_method(request: &HttpRequest) -> String {
 /// # Returns
 /// * `String` - A formatted string representation of the headers.
 pub fn get_headers(request: &HttpRequest) -> String {
-    format!("{:?}", request.headers())
+    redact_headers(request.headers().iter())
 }
 
 /// Calculate and log metrics from HTTP requests and responses.
