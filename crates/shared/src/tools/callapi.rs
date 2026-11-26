@@ -8,6 +8,7 @@
 
 use crate::call_external_api;
 use crate::tools::prometheus::CALL_EXTERNAL_API;
+use crate::tools::utils::redact_headers;
 use actix_web::{
     http::{header::ContentType, StatusCode},
     HttpResponse, ResponseError,
@@ -156,7 +157,7 @@ where
             CallAPIError::InvalidRequest(format!("Invalid Header Name : {header_key}"))
         })?;
         let header_value = HeaderValue::from_str(header_value).map_err(|_| {
-            CallAPIError::InvalidRequest(format!("Invalid Header Value : {header_value}"))
+            CallAPIError::InvalidRequest(format!("Invalid Header Value for : {header_key}"))
         })?;
 
         header_map.insert(header_name, header_value);
@@ -200,7 +201,7 @@ where
     match resp {
         Ok(resp) => {
             if resp.status().is_success() {
-                info!(tag = "[OUTGOING API]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = format!("{:?}", header_map), response = format!("{:?}", resp), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
+                info!(tag = "[OUTGOING API]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = redact_headers(header_map.iter()), response = format!("{:?}", resp), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
 
                 // If T is (), we don't need to deserialize, just return Ok(())
                 if std::any::TypeId::of::<T>() == std::any::TypeId::of::<()>() {
@@ -214,12 +215,12 @@ where
             } else {
                 let resp_status = resp.status().to_string();
                 let resp_body = resp.text().await;
-                error!(tag = "[OUTGOING API - ERROR]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = format!("{:?}", header_map), response_status = format!("{:?}", resp_status), response_body = format!("{:?}", resp_body), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
+                error!(tag = "[OUTGOING API - ERROR]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = redact_headers(header_map.iter()), response_status = format!("{:?}", resp_status), response_body = format!("{:?}", resp_body), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
                 Err(CallAPIError::ExternalAPICallError(resp_status))
             }
         }
         Err(err) => {
-            error!(tag = "[OUTGOING API - ERROR]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = format!("{:?}", header_map), error = format!("{:?}", err), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
+            error!(tag = "[OUTGOING API - ERROR]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = redact_headers(header_map.iter()), error = format!("{:?}", err), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
             Err(CallAPIError::ExternalAPICallError(err.to_string()))
         }
     }
@@ -319,7 +320,7 @@ where
             CallAPIError::InvalidRequest(format!("Invalid Header Name : {header_key}"))
         })?;
         let header_value = HeaderValue::from_str(header_value).map_err(|_| {
-            CallAPIError::InvalidRequest(format!("Invalid Header Value : {header_value}"))
+            CallAPIError::InvalidRequest(format!("Invalid Header Value for : {header_key}"))
         })?;
 
         header_map.insert(header_name, header_value);
@@ -363,7 +364,7 @@ where
     match resp {
         Ok(resp) => {
             if resp.status().is_success() {
-                info!(tag = "[OUTGOING API]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = format!("{:?}", header_map), response = format!("{:?}", resp), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
+                info!(tag = "[OUTGOING API]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = redact_headers(header_map.iter()), response = format!("{:?}", resp), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
 
                 // If T is (), we don't need to deserialize, just return Ok(())
                 if std::any::TypeId::of::<T>() == std::any::TypeId::of::<()>() {
@@ -375,12 +376,12 @@ where
                         .map_err(|err| CallAPIError::DeserializationError(err.to_string()))?)
                 }
             } else {
-                error!(tag = "[OUTGOING API - ERROR]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = format!("{:?}", header_map), error = format!("{:?}", resp), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
+                error!(tag = "[OUTGOING API - ERROR]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = redact_headers(header_map.iter()), error = format!("{:?}", resp), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
                 Err(error_handler(resp).await)
             }
         }
         Err(err) => {
-            error!(tag = "[OUTGOING API - ERROR]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = format!("{:?}", header_map), error = format!("{:?}", err), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
+            error!(tag = "[OUTGOING API - ERROR]", request_method = %method, request_body = format!("{:?}", body), request_url = %url_str, request_headers = redact_headers(header_map.iter()), error = format!("{:?}", err), latency = format!("{:?}ms", start_time.elapsed().as_millis()));
             Err(CallAPIError::ExternalAPICallError(err.to_string()).into())
         }
     }
